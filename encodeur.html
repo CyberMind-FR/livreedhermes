@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,follow">
+<title>Encodeur stéganographique — Espace Pro — La Livrée d'Hermès</title>
+<meta name="description" content="Outil d'encodage stéganographique géométrique par double référent (croix ansée + Jacquard), réservé aux membres Partenaires de La Livrée d'Hermès.">
+<link rel="canonical" href="https://anibal-amiot.com/encodeur.html">
+<script>
+  // Préchargement des référents (~403 Ko) si l'utilisateur est déjà reconnu Partenaire,
+  // pour que l'interface s'affiche sans latence supplémentaire une fois l'accès vérifié.
+  try{
+    if(localStorage.getItem('pro_token')){
+      ['data/referent_256.json','data/referent_360.json'].forEach(function(href){
+        var l = document.createElement('link');
+        l.rel = 'prefetch'; l.href = href;
+        document.head.appendChild(l);
+      });
+    }
+  }catch(e){}
+</script>
+<style>
+  :root{
+    --bg:#000; --panel:#0a0a0a; --white:#f2f2f0; --dim:#f2f2f0;
+    --red:#e0261b; --gold:#c9a15a; --line:#242424;
+  }
+  *{box-sizing:border-box;}
+  html{ overflow-x:hidden; }
+  body{ margin:0; background:var(--bg); color:var(--white); min-height:100vh; overflow-x:hidden; }
+  img, canvas, svg{ max-width:100%; }
+  [hidden]{ display:none !important; }
+  .wrap{ max-width:1120px; margin:0 auto; padding:32px 24px 64px; }
+  header{ text-align:center; margin-bottom:28px; border-bottom:1px solid var(--line); padding-bottom:20px; }
+  header h1{ font-weight:400; font-size:26px; letter-spacing:.04em; margin:8px 0 4px; }
+  header p{ color:var(--dim); font-size:12px; margin:0; }
+
+  .pro-body{ padding:24px 0 8px; }
+  .pro-title{ font-size:26px; font-weight:400; margin:0 0 26px; text-align:center; }
+  .pro-locked-box{ max-width:64ch; margin:0 auto; border:1px solid var(--gold); padding:28px 24px; color:var(--dim); font-size:14.5px; line-height:1.8; text-align:center; }
+  .pro-locked-box ul{ text-align:left; max-width:46ch; margin:16px auto 0; padding-left:20px; }
+  .pro-locked-box li{ margin-bottom:8px; }
+  .pro-locked-box button{
+    display:inline-block; margin-top:18px; border:1px solid var(--red); color:var(--red);
+    background:transparent; font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+    padding:13px 24px; cursor:pointer; transition:border-color .12s ease, color .12s ease; min-height:44px;
+  }
+  .pro-locked-box button:hover{ border-color:var(--gold); color:var(--gold); }
+  .pro-locked-box .back-link{ display:inline-block; margin-top:14px; color:var(--dim); font-size:11.5px; text-decoration:underline; }
+  .pro-locked-box .back-link:hover{ color:var(--gold); }
+
+  #encLoading{ text-align:center; color:var(--dim); font-size:13.5px; font-style:italic; padding:30px 0; }
+
+  /* ---------- interface encodeur ---------- */
+  .enc-nav{ display:flex; flex-wrap:wrap; justify-content:center; gap:8px; margin:0 0 24px; border-bottom:1px solid var(--line); padding-bottom:16px; }
+  .enc-nav button{
+    border:1px solid var(--line); background:transparent; color:var(--dim);
+    font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; padding:11px 16px;
+    cursor:pointer; font-family:inherit; transition:border-color .12s ease, color .12s ease; min-height:44px;
+  }
+  .enc-nav button.active, .enc-nav button:hover{ border-color:var(--gold); color:var(--gold); }
+  .enc-tab{ display:none; text-align:left; }
+  .enc-tab.active{ display:block; }
+  .enc-card{ max-width:760px; margin:0 auto 20px; border:1px solid var(--line); padding:24px 22px; }
+  .enc-card h2{ color:var(--gold); font-size:14.5px; font-weight:400; letter-spacing:.02em; margin:0 0 16px; }
+  .enc-label{ display:block; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); opacity:.85; margin:16px 0 6px; }
+  .enc-label:first-of-type{ margin-top:0; }
+  .enc-input, .enc-textarea, .enc-select{
+    width:100%; padding:11px 12px; border:1px solid var(--line); background:var(--panel);
+    color:var(--white); font-family:inherit; font-size:13.5px;
+  }
+  .enc-textarea{ min-height:110px; resize:vertical; font-family:monospace; font-size:12px; }
+  .enc-row{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:600px){ .enc-row{ grid-template-columns:1fr; } }
+  .enc-btn{
+    display:inline-block; border:1px solid var(--red); color:var(--red); background:transparent;
+    font-size:11px; letter-spacing:.08em; text-transform:uppercase; padding:12px 20px;
+    cursor:pointer; margin:16px 8px 0 0; transition:border-color .12s ease, color .12s ease;
+    min-height:44px; font-family:inherit;
+  }
+  .enc-btn:hover{ border-color:var(--gold); color:var(--gold); }
+  .enc-btn.secondary{ border-color:var(--line); color:var(--dim); }
+  .enc-btn.secondary:hover{ border-color:var(--gold); color:var(--gold); }
+  .enc-info-box{ border-left:3px solid var(--gold); background:var(--panel); padding:12px 16px; font-size:12.5px; line-height:1.7; margin-top:16px; color:var(--dim); }
+  .enc-info-box b{ color:var(--gold); font-weight:400; }
+  .enc-result-box{ border-left:3px solid var(--red); background:var(--panel); padding:12px 16px; font-size:13px; margin-top:16px; }
+  .enc-result-box .enc-msg{ font-size:19px; color:var(--gold); letter-spacing:.03em; }
+  #grid-canvas-wrap{ overflow:auto; margin-top:16px; border:1px solid var(--line); }
+  canvas{ display:block; }
+  .ref-note{ font-size:12.5px; color:var(--dim); opacity:.85; line-height:1.6; margin:0 0 14px; }
+  .ref-grid{ display:grid; gap:3px; margin-top:6px; }
+  .ref256-grid{ grid-template-columns:repeat(16, 1fr); }
+  .ref-cell{ aspect-ratio:1; background:var(--panel); border:1px solid var(--line); cursor:pointer; }
+  .ref-cell:hover{ border-color:var(--gold); }
+  .ref360-type-label{ font-size:11px; color:var(--dim); opacity:.8; margin:14px 0 6px; text-transform:uppercase; letter-spacing:.04em; }
+  .ref360-grid{ display:grid; grid-template-columns:repeat(24, 1fr); gap:3px; margin-bottom:6px; }
+  .ref360-cell{ aspect-ratio:1; background:var(--panel); border:1px solid var(--line); cursor:pointer; }
+  .ref360-cell:hover{ border-color:var(--gold); }
+  .keyspace-bar{ height:28px; border:1px solid var(--gold); margin-top:10px; display:flex; align-items:center; padding:0 12px; color:var(--gold); font-size:11px; letter-spacing:.02em; }
+  .enc-about p{ font-size:13.5px; line-height:1.8; margin:0 0 14px; color:var(--dim); }
+  .enc-about a{ color:var(--gold); text-decoration:none; }
+  .enc-about a:hover{ text-decoration:underline; }
+  .iacr-mention{ max-width:64ch; margin:30px auto 0; text-align:center; font-size:11px; color:var(--dim); opacity:.8; line-height:1.7; border-top:1px solid var(--line); padding-top:18px; }
+  .iacr-mention a{ color:var(--gold); text-decoration:none; }
+  .iacr-mention a:hover{ text-decoration:underline; }
+
+  /* ---------- pied de page (identique aux autres pages) ---------- */
+  .note{ margin-top:60px; padding-top:24px; border-top:1px solid var(--line); text-align:center; }
+  .credit-line{ display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; font-size:10px; color:var(--dim); margin-top:10px; }
+  .credit-line .credit-sep{ opacity:.5; }
+  .credit-line-secondary{ margin-top:6px; display:flex; align-items:center; justify-content:center; font-size:10px; color:var(--dim); }
+  .credit-line-secondary a{ color:var(--dim); text-decoration:underline; }
+  .credit-line-secondary a:hover{ color:var(--gold); }
+  .site-nav-row{ display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; margin-top:6px; }
+  .site-nav-btn{ border:1px solid var(--line); background:transparent; color:var(--dim); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; padding:9px 16px; cursor:pointer; text-decoration:none; transition:border-color .12s ease, color .12s ease; }
+  .site-nav-btn:hover{ border-color:var(--gold); color:var(--gold); }
+  .center-logo-slot{ display:flex; justify-content:center; margin:26px 0; }
+  .center-logo-slot img{ width:60px; height:60px; opacity:.9; }
+  .footer-title-logo{ display:flex; justify-content:center; margin:22px 0 4px; }
+  .footer-title-logo img{ width:220px; max-width:70%; height:auto; opacity:.85; }
+
+  @media (max-width:768px){
+    .wrap{ padding:20px 16px 48px; }
+    header h1{ font-size:21px; }
+    .enc-nav button{ padding:11px 12px; font-size:10px; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@300;400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/fonts.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="assets/title-logo-footer.png" alt="La Livrée d'Hermès" style="width:280px;max-width:80%;height:auto;display:block;margin:0 auto 10px;">
+    <h1>Encodeur stéganographique</h1>
+    <p>Cachez un message dans une grille de nombres — double référent croix ansée + Jacquard</p>
+    <div id="google_translate_element" style="display:flex;justify-content:center;margin:10px 0 0;"></div>
+  </header>
+
+  <div class="pro-body">
+    <div class="pro-locked-box" data-pro-locked-only hidden>
+      <p>Cette page est réservée aux Partenaires (paiement unique de 99 €).</p>
+      <p>L'accès Partenaire débloque, entre autres avantages, l'outil d'encodage stéganographique géométrique développé par l'auteur — un système de dissimulation de message dans une grille de nombres, à double référent (croix ansée à 256 formes, calques Jacquard à 360 formes) :</p>
+      <ul>
+        <li>Démonstration et encodage/décodage de messages, entièrement côté client</li>
+        <li>Visualisation des 256 formes de la croix ansée et des 360 formes Jacquard</li>
+        <li>Téléchargement de la grille et des clés générées</li>
+        <li>Accès à la collection complète Unified Patterns, des outils avancés de création textile, une consultation avec l'auteur, et l'espace communautaire réservé</li>
+      </ul>
+      <button type="button" id="unlockBtn">Devenir Partenaire — 99 €</button>
+      <br>
+      <a class="back-link" href="pro.html">← Voir tous les avantages Partenaire</a>
+    </div>
+
+    <div data-pro-only hidden id="encProOnly">
+      <p id="encLoading">Chargement des référents…</p>
+
+      <div id="encApp" hidden>
+        <nav class="enc-nav">
+          <button type="button" class="active" data-tab="demo">⚡ Démo</button>
+          <button type="button" data-tab="encoder">🔒 Encoder</button>
+          <button type="button" data-tab="decoder">🔓 Décoder</button>
+          <button type="button" data-tab="referents">📐 Référents</button>
+          <button type="button" data-tab="about">📖 À propos</button>
+        </nav>
+
+        <!-- DÉMO -->
+        <div id="tab-demo" class="enc-tab active">
+          <div class="enc-card">
+            <h2>Démonstration : message ANIBALAMIOTX</h2>
+            <p class="enc-info-box"><b>ANIBALAMIOTX</b> (12 caractères) est encodé dans une grille 60×60 de nombres aléatoires. Seuls les 12 caractères aux positions désignées par les formes de la Clé 2 portent le message ; les 3588 autres cases sont du bruit indiscernable.</p>
+            <button type="button" class="enc-btn" id="btnRunDemo">Lancer la démonstration</button>
+            <div id="demo-result" hidden>
+              <div class="enc-result-box" id="demo-msg"></div>
+              <div class="enc-info-box" id="demo-ks"></div>
+              <div id="grid-canvas-wrap"><canvas id="demo-canvas"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ENCODER -->
+        <div id="tab-encoder" class="enc-tab">
+          <div class="enc-card">
+            <h2>Encoder un message</h2>
+            <label class="enc-label">Message à encoder</label>
+            <input type="text" class="enc-input" id="enc-message" placeholder="VOTRE MESSAGE ICI" maxlength="200">
+            <div class="enc-row">
+              <div>
+                <label class="enc-label">Taille de grille</label>
+                <select class="enc-select" id="enc-grid">
+                  <option value="60">60×60 (25 blocs) — recommandé</option>
+                  <option value="48">48×48 (16 blocs)</option>
+                  <option value="36">36×36 (9 blocs)</option>
+                </select>
+              </div>
+              <div>
+                <label class="enc-label">Mode</label>
+                <select class="enc-select" id="enc-mode">
+                  <option value="256">Référent 256 uniquement</option>
+                  <option value="mixed">Mixte 256+360</option>
+                </select>
+              </div>
+            </div>
+            <label class="enc-label">Graine aléatoire (optionnel)</label>
+            <input type="text" class="enc-input" id="enc-seed" placeholder="Laisser vide pour aléatoire">
+            <button type="button" class="enc-btn" id="btnEncode">Encoder</button>
+            <div id="enc-result" hidden>
+              <div class="enc-info-box" id="enc-info"></div>
+              <div class="enc-row" style="margin-top:14px">
+                <div>
+                  <label class="enc-label">Clé 1 — Grammaire (bits)</label>
+                  <textarea class="enc-textarea" id="enc-key1" readonly></textarea>
+                </div>
+                <div>
+                  <label class="enc-label">Grille encodée (CSV, aperçu)</label>
+                  <textarea class="enc-textarea" id="enc-grid-out" readonly></textarea>
+                </div>
+              </div>
+              <label class="enc-label">Clé 2 — Formes (JSON)</label>
+              <textarea class="enc-textarea" id="enc-key2" readonly style="min-height:70px"></textarea>
+              <button type="button" class="enc-btn" id="btnDownloadGrid">⬇ Télécharger la grille CSV</button>
+              <button type="button" class="enc-btn secondary" id="btnDownloadKeys">⬇ Télécharger les clés JSON</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- DECODER -->
+        <div id="tab-decoder" class="enc-tab">
+          <div class="enc-card">
+            <h2>Décoder un message</h2>
+            <label class="enc-label">Grille CSV (coller ou charger)</label>
+            <textarea class="enc-textarea" id="dec-grid" placeholder="1,23,5,14,2,..."></textarea>
+            <label class="enc-label">Clé 1 — Grammaire (liste de 0/1, séparés par virgule)</label>
+            <input type="text" class="enc-input" id="dec-key1" placeholder="0,0,1,0,...">
+            <label class="enc-label">Clé 2 — Formes (JSON)</label>
+            <textarea class="enc-textarea" id="dec-key2" placeholder='[{"ref":256,"form_id":42,"color":"blue"},...]' style="min-height:70px"></textarea>
+            <label class="enc-label">Longueur du message (optionnel)</label>
+            <input type="number" class="enc-input" id="dec-len" placeholder="Laisser vide pour tout décoder">
+            <button type="button" class="enc-btn" id="btnDecode">Décoder</button>
+            <div id="dec-result" hidden>
+              <div class="enc-result-box" id="dec-msg"></div>
+            </div>
+          </div>
+          <div class="enc-card">
+            <h2>Charger depuis un fichier</h2>
+            <label class="enc-label">Fichier grille CSV</label>
+            <input type="file" class="enc-input" id="dec-file-grid" accept=".csv">
+            <label class="enc-label">Fichier clés JSON</label>
+            <input type="file" class="enc-input" id="dec-file-keys" accept=".json">
+          </div>
+        </div>
+
+        <!-- RÉFÉRENTS -->
+        <div id="tab-referents" class="enc-tab">
+          <div class="enc-card">
+            <h2>Référent 256 — Table des formes de la croix ansée</h2>
+            <p class="ref-note">256 configurations géométriques distinctes issues des rotations (0°/90°/180°/270°) de la croix ansée d'ordre 6. Survolez une cellule pour voir ses positions. ×2 couleurs = 512 formes utilisables.</p>
+            <div class="ref-grid ref256-grid" id="ref256-display"></div>
+          </div>
+          <div class="enc-card">
+            <h2>Référent 360 — Calques Jacquard</h2>
+            <p class="ref-note">360 formes issues du métier Jacquard à 360 calques. Structure : 15 harmonies × 24 cartes. Chaque calque sélectionne 8 positions de lecture dans un bloc 12×12. (<span id="ref360-count">—</span> formes extraites des fichiers SVG sources.)</p>
+            <div id="ref360-groups"></div>
+          </div>
+        </div>
+
+        <!-- À PROPOS -->
+        <div id="tab-about" class="enc-tab">
+          <div class="enc-card enc-about">
+            <h2>Système de stéganographie géométrique par double référent</h2>
+            <p>Ce système est une application cryptographique des constructions arithmogéométriques développées dans <i>La Livrée d'Hermès</i> (Anibal Edelberto Amiot, 2026). Soumis à l'<a href="https://eprint.iacr.org" target="_blank" rel="noopener">IACR Cryptology ePrint Archive</a> en septembre 2026.</p>
+            <div class="enc-info-box">
+              <b>Principe :</b> un message est dissimulé dans une grille de nombres aléatoires. Seul le destinataire disposant des deux clés peut identifier les positions porteuses du message. Sans les clés, la grille est statistiquement indiscernable du bruit aléatoire.<br><br>
+              <b>Référent 256 :</b> 256 formes géométriques distinctes issues de la méthode de construction des carrés magiques d'ordre 6 (croix ansée). Vérifiées informatiquement.<br><br>
+              <b>Référent 360 :</b> 360 formes issues du système Jacquard. Structure : 6 niveaux × 24 cases × 4 colorations × 15 harmonies géométriques. La classification proposée dans le livre est un protocole pédagogique — tout autre protocole produisant 360 formes distinctes est également valide.<br><br>
+              <b>Espace de clés :</b> 2^250 à 2^30878 bits selon le niveau de personnalisation. AES-256 (standard militaire) = 2^256 bits.
+            </div>
+            <div class="enc-info-box">
+              <b>Kerckhoffs :</b> le système respecte le principe de Kerckhoffs (1883) — l'algorithme est entièrement public, le secret repose uniquement sur les clés et, optionnellement, sur des référents personnalisés.<br><br>
+              <b>Brevet antécédent :</b> <a href="https://patents.google.com/patent/FR2865054A1/fr" target="_blank" rel="noopener">FR2865054</a> (2004) — composition automatisée d'un motif symbolique à partir d'une relation mathématique.<br><br>
+              <b>Contact :</b> anibaledel@gmail.com · <a href="https://anibal-amiot.com" target="_blank" rel="noopener">anibal-amiot.com</a> · Wikidata <a href="https://www.wikidata.org/wiki/Q141191562" target="_blank" rel="noopener">Q141191562</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="iacr-mention" data-pro-only hidden>
+      Système soumis à l'<a href="https://eprint.iacr.org" target="_blank" rel="noopener">IACR Cryptology ePrint Archive</a> — Septembre 2026 · <a href="https://anibal-amiot.com" target="_blank" rel="noopener">anibal-amiot.com</a> · Wikidata <a href="https://www.wikidata.org/wiki/Q141191562" target="_blank" rel="noopener">Q141191562</a> · Brevet FR2865054
+    </div>
+  </div>
+
+  <div class="note">
+    <div class="center-logo-slot">
+      <img src="assets/logo-static.gif" alt="La Livrée d'Hermès">
+    </div>
+    <button type="button" class="site-nav-btn" id="btnSoutienFooter" style="display:inline-block; margin:14px 0;" title="Deviens Soutien de la Livrée d'Hermès — contribue à prix libre et débloque, de façon permanente, le téléchargement des fichiers SVG/PDF du livre.">Devenir Soutien</button>
+
+    <div class="site-nav-row">
+      <a class="site-nav-btn" href="index.html">Accueil</a>
+      <a class="site-nav-btn" href="pro.html">Accès Pro</a>
+      <a class="site-nav-btn" href="pro-contenu.html">Espace Pro</a>
+      <a class="site-nav-btn" href="a-propos.html">À propos</a>
+      <a class="site-nav-btn" href="contact.html">Contact</a>
+    </div>
+
+    <div class="credit-line">
+      <span>© <span id="credit-year">2026</span> Anibal Edelberto Amiot — Tous droits réservés</span>
+      <span class="credit-sep">·</span>
+      <span>Créé en collaboration avec Claude</span>
+    </div>
+    <div class="credit-line-secondary">
+      <span>Hébergé par <a href="https://gk2.net" target="_blank" rel="noopener">https://gk2.net</a> – l'internet des créatifs</span>
+    </div>
+
+    <div class="footer-title-logo">
+      <img src="assets/title-logo-footer.png" alt="La Livrée d'Hermès">
+    </div>
+    <a class="site-nav-btn footer-partenaire-btn" id="btnPartenaireFooter" href="https://anibal-amiot.com/pro.html" style="display:inline-block; margin:14px 0;" title="Deviens Partenaire de la Livrée d'Hermès. Un accès unique à 99€ (paiement unique, à vie) qui t'ouvre les pages secrètes du projet : la collection complète des motifs Unified Patterns (en croissance constante) en SVG/PDF haute résolution, des outils avancés pour la création textile, une consultation gratuite avec l'auteur, l'accès à un espace communautaire réservé, et les dernières créations/mises à jour en avant-première.">Devenir Partenaire</a>
+  </div>
+</div>
+
+<script>
+  document.getElementById('credit-year').textContent = new Date().getFullYear();
+  document.getElementById('unlockBtn').addEventListener('click', function(){
+    window.ProGate.showModal();
+  });
+</script>
+<script src="assets/pro-gate.js"></script>
+<script src="https://anibal-amiot.com/assets/soutien-gate.js"></script>
+<script>
+(function(){
+  var b = document.getElementById('btnSoutienFooter');
+  if(b) b.addEventListener('click', function(){ if(window.SoutienGate) window.SoutienGate.showModal(); });
+})();
+</script>
+
+<script type="text/javascript">
+  function googleTranslateElementInit(){
+    new google.translate.TranslateElement({pageLanguage: 'fr', autoDisplay: false}, 'google_translate_element');
+  }
+</script>
+<script type="text/javascript" src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
+
+<!-- ============================================================
+     Encodeur stéganographique — algorithmes JS repris tels quels de
+     stegano_app.zip/index.html (Anibal Edelberto Amiot). Ne charge les
+     référents (data/referent_256.json, data/referent_360.json, ~403 Ko)
+     qu'une fois l'accès Pro confirmé par assets/pro-gate.js — jamais avant.
+     ============================================================ -->
+<script>
+(function(){
+  let REF256 = null, REF360 = null;
+
+  const ALPHABET = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?-';
+  function charToNum(c){ const i=ALPHABET.indexOf(c.toUpperCase()); return i<0?0:i; }
+  function numToChar(n){ return n>=0&&n<ALPHABET.length?ALPHABET[n]:'?'; }
+
+  function showTab(name, btnEl){
+    document.querySelectorAll('.enc-tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.enc-nav button').forEach(b=>b.classList.remove('active'));
+    document.getElementById('tab-'+name).classList.add('active');
+    if(btnEl) btnEl.classList.add('active');
+    if(name==='referents') renderReferents();
+  }
+
+  function mkRng(seed){
+    let s = seed===null || seed===undefined || isNaN(seed) ? Math.random()*2**32|0 : seed;
+    return ()=>{ s=(s*1664525+1013904223)&0xFFFFFFFF; return (s>>>0)/2**32; };
+  }
+
+  function zigzag(B){
+    const order=[];
+    for(let r=0;r<B;r++){
+      if(r%2===0) for(let c=B-1;c>=0;c--) order.push([r,c]);
+      else for(let c=0;c<B;c++) order.push([r,c]);
+    }
+    return order;
+  }
+
+  function jsEncode(msg, grammarKey, formKey, ref256, ref360, N=60, seed=null){
+    const rng=mkRng(seed);
+    const vr=ALPHABET.length-1;
+    const grid=Array.from({length:N},()=>Array.from({length:N},()=>Math.max(1,Math.floor(rng()*vr+1))));
+    const nums=msg.toUpperCase().split('').map(charToNum);
+    let mi=0;
+    const B=N/12;
+    const order=zigzag(B);
+    for(let bi=0;bi<order.length&&mi<nums.length;bi++){
+      const[br,bc]=order[bi]; const gk=grammarKey[bi]; const fk=formKey[bi];
+      if(gk===0){
+        const f=ref256[fk.form_id%ref256.length];
+        const pos=fk.color==='blue'?f.blue:f.orange;
+        for(const[r,c] of pos){ if(mi>=nums.length)break; grid[br*12+r][bc*12+c]=nums[mi++]; }
+        for(const[r,c] of pos){ if(mi>=nums.length)break; grid[br*12+r][bc*12+6+c]=nums[mi++]; }
+      } else {
+        const f=ref360[fk.form_id%ref360.length];
+        const pos=(f.positions||{})[fk.color]||[];
+        for(const[r,c] of pos){ if(mi>=nums.length)break; grid[br*12+r][bc*12+c]=nums[mi++]; }
+      }
+    }
+    return grid;
+  }
+
+  function jsDecode(grid, grammarKey, formKey, ref256, ref360){
+    const N=grid.length; const B=N/12; const nums=[];
+    for(const[bi,[br,bc]] of zigzag(B).entries()){
+      const gk=grammarKey[bi]; const fk=formKey[bi];
+      if(gk===0){
+        const f=ref256[fk.form_id%ref256.length];
+        const pos=fk.color==='blue'?f.blue:f.orange;
+        for(const[r,c] of pos) nums.push(grid[br*12+r][bc*12+c]);
+        for(const[r,c] of pos) nums.push(grid[br*12+r][bc*12+6+c]);
+      } else {
+        const f=ref360[fk.form_id%ref360.length];
+        const pos=(f.positions||{})[fk.color]||[];
+        for(const[r,c] of pos) nums.push(grid[br*12+r][bc*12+c]);
+      }
+    }
+    return nums.map(numToChar).join('');
+  }
+
+  function makeKey(msgLen, ref256, ref360, N=60, useRef360=false, seed=null){
+    const rng=mkRng(seed);
+    const B=N/12; const n=B*B;
+    const gk=[], fk=[];
+    for(let i=0;i<n;i++){
+      const g=(useRef360&&rng()>0.5)?1:0;
+      gk.push(g);
+      if(g===0){
+        fk.push({ref:256,form_id:Math.floor(rng()*ref256.length),color:rng()>0.5?'blue':'orange'});
+      } else {
+        const avail=ref360.filter(f=>f.available_colors&&f.available_colors.length>0);
+        const f=avail[Math.floor(rng()*avail.length)];
+        const col=f.available_colors[Math.floor(rng()*f.available_colors.length)];
+        fk.push({ref:360,form_id:f.id,color:col});
+      }
+    }
+    return {gk,fk};
+  }
+
+  function keyspace(gk, ref256, ref360){
+    const n256=gk.filter(g=>g===0).length, n360=gk.length-n256;
+    const gb=gk.length;
+    const b256=n256*Math.log2(Math.max(1,ref256.length*2));
+    const avgC=ref360.reduce((s,f)=>s+(f.available_colors||[]).length,0)/Math.max(1,ref360.length);
+    const b360=n360*Math.log2(Math.max(1,ref360.length*avgC));
+    return {gb, b256:b256.toFixed(1), b360:b360.toFixed(1), total:(gb+b256+b360).toFixed(1)};
+  }
+
+  function drawGrid(grid, gk, fk, ref256, ref360, canvasId){
+    const N=grid.length, B=N/12;
+    const cs=8;
+    const canvas=document.getElementById(canvasId);
+    canvas.width=N*cs; canvas.height=N*cs;
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#0a0a0a'; ctx.fillRect(0,0,N*cs,N*cs);
+    for(let r=0;r<N;r++) for(let c=0;c<N;c++){
+      const v=grid[r][c];
+      const g=Math.floor(40+v*1.4);
+      ctx.fillStyle=`rgb(${g},${g},${g-6})`;
+      ctx.fillRect(c*cs,r*cs,cs-1,cs-1);
+    }
+    const order=zigzag(B);
+    for(let bi=0;bi<order.length;bi++){
+      const[br,bc]=order[bi]; const g=gk[bi]; const f=fk[bi];
+      let positions=[];
+      if(g===0){
+        const form=ref256[f.form_id%ref256.length];
+        const pos=f.color==='blue'?form.blue:form.orange;
+        for(const[r,c] of pos){ positions.push([br*12+r,bc*12+c]); positions.push([br*12+r,bc*12+6+c]); }
+        ctx.fillStyle='rgba(201,161,90,0.85)';
+      } else {
+        const form=ref360[f.form_id%ref360.length];
+        positions=((form.positions||{})[f.color]||[]).map(([r,c])=>[br*12+r,bc*12+c]);
+        ctx.fillStyle='rgba(224,38,27,0.85)';
+      }
+      for(const[r,c] of positions) ctx.fillRect(c*cs,r*cs,cs-1,cs-1);
+    }
+    ctx.strokeStyle='rgba(242,242,240,0.15)'; ctx.lineWidth=0.5;
+    for(let b=0;b<=B;b++){
+      ctx.beginPath(); ctx.moveTo(b*12*cs,0); ctx.lineTo(b*12*cs,N*cs); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,b*12*cs); ctx.lineTo(N*cs,b*12*cs); ctx.stroke();
+    }
+  }
+
+  let _lastGrid=null, _lastGk=null, _lastFk=null;
+
+  function runDemo(){
+    if(!REF256||!REF360) return;
+    const msg='ANIBALAMIOTX';
+    const {gk,fk}=makeKey(msg.length,REF256,REF360,60,false,42);
+    const grid=jsEncode(msg,gk,fk,REF256,REF360,60,42);
+    const decoded=jsDecode(grid,gk,fk,REF256,REF360).substring(0,msg.length);
+    const ks=keyspace(gk,REF256,REF360);
+    _lastGrid=grid; _lastGk=gk; _lastFk=fk;
+    document.getElementById('demo-result').hidden=false;
+    document.getElementById('demo-msg').innerHTML=
+      `<div>Message encodé : <span class="enc-msg">${msg}</span></div>
+       <div style="margin-top:6px">Décodé : <span class="enc-msg">${decoded}</span> — identique : ${decoded===msg}</div>`;
+    document.getElementById('demo-ks').innerHTML=
+      `<b>Espace de clés</b> (grille 60×60, Référent 256 uniquement) : 2^${ks.total} bits<br>
+       AES-256 (standard militaire) : 2^256 bits
+       <div class="keyspace-bar">2^${ks.total} bits — entre AES-192 et AES-256</div>`;
+    drawGrid(grid,gk,fk,REF256,REF360,'demo-canvas');
+  }
+
+  function encodeMessage(){
+    if(!REF256||!REF360) return;
+    const msg=document.getElementById('enc-message').value.trim().toUpperCase();
+    if(!msg){ alert('Entrez un message.'); return; }
+    const N=parseInt(document.getElementById('enc-grid').value);
+    const useRef360=document.getElementById('enc-mode').value==='mixed';
+    const seedVal=document.getElementById('enc-seed').value.trim();
+    const seed=seedVal?parseInt(seedVal):null;
+    const {gk,fk}=makeKey(msg.length,REF256,REF360,N,useRef360,seed);
+    const grid=jsEncode(msg,gk,fk,REF256,REF360,N,seed);
+    _lastGrid=grid; _lastGk=gk; _lastFk=fk;
+    const ks=keyspace(gk,REF256,REF360);
+    document.getElementById('enc-result').hidden=false;
+    document.getElementById('enc-info').innerHTML=
+      `Message « ${msg} » encodé dans une grille ${N}×${N}<br>
+       Espace de clés : 2^${ks.total} bits (Grammaire 2^${ks.gb} · Ref256 2^${ks.b256} · Ref360 2^${ks.b360})`;
+    document.getElementById('enc-key1').value=gk.join(',');
+    document.getElementById('enc-key2').value=JSON.stringify(fk);
+    const csvLines=grid.slice(0,5).map(r=>r.join(',')).join('\n')+'\n...';
+    document.getElementById('enc-grid-out').value=csvLines;
+  }
+  function gridToCsv(grid){ return grid.map(r=>r.join(',')).join('\n'); }
+  function downloadGrid(){
+    if(!_lastGrid) return;
+    const blob=new Blob([gridToCsv(_lastGrid)],{type:'text/csv'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='grille_steganographique.csv'; a.click();
+  }
+  function downloadKeys(){
+    if(!_lastGk) return;
+    const keys={grammar_key:_lastGk,form_key:_lastFk,grid_size:_lastGrid.length};
+    const blob=new Blob([JSON.stringify(keys,null,2)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='cles_steganographiques.json'; a.click();
+  }
+
+  function decodeMessage(){
+    if(!REF256||!REF360) return;
+    const csvStr=document.getElementById('dec-grid').value.trim();
+    const key1Str=document.getElementById('dec-key1').value.trim();
+    const key2Str=document.getElementById('dec-key2').value.trim();
+    const lenVal=document.getElementById('dec-len').value.trim();
+    if(!csvStr||!key1Str||!key2Str){ alert('Remplir tous les champs.'); return; }
+    try{
+      const grid=csvStr.split('\n').map(r=>r.split(',').map(Number));
+      const gk=key1Str.split(',').map(Number);
+      const fk=JSON.parse(key2Str);
+      let msg=jsDecode(grid,gk,fk,REF256,REF360);
+      if(lenVal) msg=msg.substring(0,parseInt(lenVal));
+      document.getElementById('dec-result').hidden=false;
+      document.getElementById('dec-msg').innerHTML=`Message décodé : <span class="enc-msg">${msg}</span>`;
+    } catch(e){ alert('Erreur : '+e.message); }
+  }
+  function loadGridFile(input){
+    if(!input.files[0]) return;
+    const fr=new FileReader();
+    fr.onload=e=>{ document.getElementById('dec-grid').value=e.target.result; };
+    fr.readAsText(input.files[0]);
+  }
+  function loadKeysFile(input){
+    if(!input.files[0]) return;
+    const fr=new FileReader();
+    fr.onload=e=>{
+      const k=JSON.parse(e.target.result);
+      document.getElementById('dec-key1').value=k.grammar_key.join(',');
+      document.getElementById('dec-key2').value=JSON.stringify(k.form_key);
+    };
+    fr.readAsText(input.files[0]);
+  }
+
+  function renderReferents(){
+    if(!REF256||!REF360) return;
+    const g256=document.getElementById('ref256-display');
+    if(g256.childElementCount===0){
+      REF256.forEach(f=>{
+        const cell=document.createElement('div');
+        cell.className='ref-cell';
+        cell.title=`Forme #${f.id} (${f.row},${f.col})\nBleu : ${JSON.stringify(f.blue)}\nOrange : ${JSON.stringify(f.orange)}`;
+        const cv=document.createElement('canvas');
+        cv.width=cv.height=30;
+        const ctx=cv.getContext('2d');
+        ctx.fillStyle='#0a0a0a'; ctx.fillRect(0,0,30,30);
+        const cs=4;
+        f.blue.forEach(([r,c])=>{ ctx.fillStyle='#c9a15a'; ctx.fillRect(c*cs+1,r*cs+1,cs-1,cs-1); });
+        f.orange.forEach(([r,c])=>{ ctx.fillStyle='#e0261b'; ctx.fillRect(c*cs+1,r*cs+1,cs-1,cs-1); });
+        cell.appendChild(cv);
+        g256.appendChild(cell);
+      });
+    }
+    document.getElementById('ref360-count').textContent=REF360.length;
+    const g360=document.getElementById('ref360-groups');
+    if(g360.childElementCount===0){
+      const byType={};
+      REF360.forEach(f=>{ if(!byType[f.type]) byType[f.type]=[]; byType[f.type].push(f); });
+      const cols={'C1':'#c9a15a','C2':'#e0261b','C3':'#f2f2f0','C4':'#7a6244'};
+      for(const[type,forms] of Object.entries(byType)){
+        const label=document.createElement('p');
+        label.className='ref360-type-label';
+        label.textContent=type+' — '+forms.length+' formes';
+        g360.appendChild(label);
+        const grid=document.createElement('div');
+        grid.className='ref360-grid';
+        forms.slice(0,48).forEach(f=>{
+          const cell=document.createElement('div');
+          cell.className='ref360-cell';
+          cell.title=`#${f.id} ${f.subtype}\nCouleurs : ${(f.available_colors||[]).join(', ')}`;
+          const cv=document.createElement('canvas');
+          cv.width=cv.height=24;
+          const ctx=cv.getContext('2d');
+          ctx.fillStyle='#0a0a0a'; ctx.fillRect(0,0,24,24);
+          const cs=2;
+          Object.entries(f.positions||{}).forEach(([col,pos])=>{
+            ctx.fillStyle=cols[col]||'#999';
+            pos.forEach(([r,c])=>ctx.fillRect(c*cs,r*cs,cs,cs));
+          });
+          cell.appendChild(cv); grid.appendChild(cell);
+        });
+        g360.appendChild(grid);
+      }
+    }
+  }
+
+  async function loadReferents(){
+    try{
+      const [r256, r360] = await Promise.all([
+        fetch('data/referent_256.json').then(r => r.json()),
+        fetch('data/referent_360.json').then(r => r.json()),
+      ]);
+      REF256 = r256;
+      REF360 = r360;
+      document.getElementById('encLoading').hidden = true;
+      document.getElementById('encApp').hidden = false;
+    }catch(e){
+      document.getElementById('encLoading').textContent = "Erreur de chargement des référents — réessaie de recharger la page.";
+    }
+  }
+
+  function wireUI(){
+    document.querySelectorAll('.enc-nav button[data-tab]').forEach(btn=>{
+      btn.addEventListener('click', function(){ showTab(this.getAttribute('data-tab'), this); });
+    });
+    document.getElementById('btnRunDemo').addEventListener('click', runDemo);
+    document.getElementById('btnEncode').addEventListener('click', encodeMessage);
+    document.getElementById('btnDecode').addEventListener('click', decodeMessage);
+    document.getElementById('btnDownloadGrid').addEventListener('click', downloadGrid);
+    document.getElementById('btnDownloadKeys').addEventListener('click', downloadKeys);
+    document.getElementById('dec-file-grid').addEventListener('change', function(){ loadGridFile(this); });
+    document.getElementById('dec-file-keys').addEventListener('change', function(){ loadKeysFile(this); });
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    wireUI();
+    const proOnlyEl = document.getElementById('encProOnly');
+    function tryInit(){
+      if(!proOnlyEl.hidden && !REF256){ loadReferents(); }
+    }
+    new MutationObserver(tryInit).observe(proOnlyEl, {attributes:true, attributeFilter:['hidden']});
+    tryInit();
+  });
+})();
+</script>
+</body>
+</html>
