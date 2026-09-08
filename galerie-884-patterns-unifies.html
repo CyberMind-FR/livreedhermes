@@ -144,12 +144,73 @@
     header h1{ font-size:22px; }
     .site-nav-btn{ padding:11px 16px; }
     .book-bar .flag-btn{ width:36px; height:32px; }
+    .faq-item summary{ font-size:14px; }
+    .faq-item p{ font-size:13.5px; }
   }
+
+  /* ---------- FAQ (accordéon natif <details>, texte présent en HTML pour l'indexation) ---------- */
+  .faq-block{ max-width:64ch; margin:26px auto 0; text-align:left; font-family:Helvetica,Arial,sans-serif; }
+  .faq-block-title{ font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--gold); font-weight:400; margin:0 0 14px; text-align:center; }
+  .faq-item{ border-top:1px solid var(--line); padding:12px 0; }
+  .faq-item:last-child{ border-bottom:1px solid var(--line); }
+  .faq-item summary{ cursor:pointer; color:var(--white); font-size:13.5px; list-style:none; display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
+  .faq-item summary::-webkit-details-marker{ display:none; }
+  .faq-item summary .q-mark{ color:var(--gold); font-size:15px; flex-shrink:0; }
+  .faq-item[open] summary .q-mark{ transform:rotate(45deg); display:inline-block; }
+  .faq-item p{ color:var(--dim); font-size:12.5px; line-height:1.7; margin:10px 0 0; }
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@300;400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/fonts.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Qu'est-ce que les Unified Patterns ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Les Unified Patterns sont des cellules de tessellation où les coins font écho au centre, afin de générer la fréquence d'un seul motif."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Quelles sont les contraintes de création des Unified Patterns ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Deux contraintes définissent un Unified Pattern. La première : associer une seule et même couleur aux deux matrices de 6 éléments produit une grille équilibrée en 3×12. La seconde : les côtés de la grille doivent faire écho au centre."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Comment les Unified Patterns sont-ils identifiés parmi les grilles équilibrées ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "La première contrainte (couleur unique sur les deux matrices de 6) fait apparaître une première série de 8 Unified Patterns au sein de l'ensemble des grilles équilibrées en 3×12. C'est ce qui permet de distinguer, parmi les grilles équilibrées, celles qui sont spécifiquement des Unified Patterns."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Comment ces matrices sont-elles classifiées ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "La classification utilise le système Jacquard pour générer et organiser les matrices équilibrées et les Unified Patterns. Le chapitre VII de La Livrée d'Hermès est consacré à la classification binaire de ces matrices."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Sur quelle harmonie ce système a-t-il été vérifié ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Le système d'encodage a été étudié et vérifié pour l'harmonie 12/12/6/6 (quatre matrices de remplissage réparties en deux paires de 12 et deux paires de 6 éléments)."
+      }
+    }
+  ]
+}
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -202,6 +263,30 @@
       <div class="stat"><span class="n">884</span><span class="l">Patterns unifiés</span></div>
     </div>
   </header>
+
+  <div class="faq-block">
+    <p class="faq-block-title">Questions fréquentes</p>
+    <details class="faq-item">
+      <summary>Qu'est-ce que les Unified Patterns ?<span class="q-mark">＋</span></summary>
+      <p>Les Unified Patterns sont des cellules de tessellation où les coins font écho au centre, afin de générer la fréquence d'un seul motif.</p>
+    </details>
+    <details class="faq-item">
+      <summary>Quelles sont les contraintes de création des Unified Patterns ?<span class="q-mark">＋</span></summary>
+      <p>Deux contraintes définissent un Unified Pattern. La première : associer une seule et même couleur aux deux matrices de 6 éléments produit une grille équilibrée en 3×12. La seconde : les côtés de la grille doivent faire écho au centre.</p>
+    </details>
+    <details class="faq-item">
+      <summary>Comment les Unified Patterns sont-ils identifiés parmi les grilles équilibrées ?<span class="q-mark">＋</span></summary>
+      <p>La première contrainte (couleur unique sur les deux matrices de 6) fait apparaître une première série de 8 Unified Patterns au sein de l'ensemble des grilles équilibrées en 3×12. C'est ce qui permet de distinguer, parmi les grilles équilibrées, celles qui sont spécifiquement des Unified Patterns.</p>
+    </details>
+    <details class="faq-item">
+      <summary>Comment ces matrices sont-elles classifiées ?<span class="q-mark">＋</span></summary>
+      <p>La classification utilise le système Jacquard pour générer et organiser les matrices équilibrées et les Unified Patterns. Le chapitre VII de La Livrée d'Hermès est consacré à la classification binaire de ces matrices.</p>
+    </details>
+    <details class="faq-item">
+      <summary>Sur quelle harmonie ce système a-t-il été vérifié ?<span class="q-mark">＋</span></summary>
+      <p>Le système d'encodage a été étudié et vérifié pour l'harmonie 12/12/6/6 (quatre matrices de remplissage réparties en deux paires de 12 et deux paires de 6 éléments).</p>
+    </details>
+  </div>
 
   <p class="mode-hint">Choisis le mode d'affichage et sa coloration</p>
   <div class="controls" id="modeControls">

@@ -56,6 +56,17 @@
   .about-intro p:last-child{ margin-bottom:0; }
   .about-intro em{ color:var(--gold); font-style:italic; }
 
+  /* ---------- FAQ (accordéon natif <details>, texte présent en HTML pour l'indexation) ---------- */
+  .faq-block{ max-width:64ch; margin:0 auto 40px; text-align:left; }
+  .faq-block-title{ font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--gold); font-weight:400; margin:0 0 16px; text-align:center; }
+  .faq-item{ border-top:1px solid var(--line); padding:14px 0; }
+  .faq-item:last-child{ border-bottom:1px solid var(--line); }
+  .faq-item summary{ cursor:pointer; color:var(--white); font-size:14.5px; list-style:none; display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
+  .faq-item summary::-webkit-details-marker{ display:none; }
+  .faq-item summary .q-mark{ color:var(--gold); font-size:16px; flex-shrink:0; }
+  .faq-item[open] summary .q-mark{ transform:rotate(45deg); display:inline-block; }
+  .faq-item p{ color:var(--dim); font-size:14px; line-height:1.7; margin:12px 0 0; }
+
   /* ---------- pied de page (identique aux autres pages) ---------- */
   .note{ margin-top:60px; padding-top:24px; border-top:1px solid var(--line); text-align:center; }
   .credit-line{
@@ -100,6 +111,8 @@
     header h1{ font-size:19px; letter-spacing:.02em; }
     header p{ font-size:14px; }
     .about-intro{ font-size:14.5px; }
+    .faq-item summary{ font-size:15px; }
+    .faq-item p{ font-size:14.5px; }
   }
 
   /* ---------- colonnes latérales décoratives (gif animé, mécanisme repris de la page Articles) ---------- */
@@ -179,6 +192,22 @@
   ]
 }
 </script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Qui est Anibal Edelberto Amiot ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Anibal Edelberto Amiot est l'auteur de La Livrée d'Hermès et l'inventeur d'un système de transcription et de classification de matrices géométriques en binaire via la technologie Jacquard. Il est titulaire de deux brevets français et référencé sur Wikidata comme auteur et inventeur."
+      }
+    }
+  ]
+}
+</script>
 </head>
 <body>
 <div class="side-band left visible"></div>
@@ -192,6 +221,14 @@
   </header>
 
   <div class="about-body">
+    <div class="faq-block">
+      <p class="faq-block-title">Questions fréquentes</p>
+      <details class="faq-item">
+        <summary>Qui est Anibal Edelberto Amiot ?<span class="q-mark">＋</span></summary>
+        <p>Anibal Edelberto Amiot est l'auteur de La Livrée d'Hermès et l'inventeur d'un système de transcription et de classification de matrices géométriques en binaire via la technologie Jacquard. Il est titulaire de deux brevets français et référencé sur <a href="https://www.wikidata.org/wiki/Q141191562" target="_blank" rel="noopener" style="color:var(--gold);">Wikidata</a> comme auteur et inventeur.</p>
+      </details>
+    </div>
+
     <div class="about-intro">
       <p>Anibal Amiot a été éditeur de livres et concepteur de jeux vidéo — activités qu'il a notamment exercées via les structures Agnibal Editions (SIREN 841620818, Paris, code NAF 5811Z, Édition de livres) et Amiot Anibal (SIREN 810931261, Paris, code NAF 5821Z, Édition de jeux électroniques). Il est également artiste et concepteur — deux activités qui se prolongent naturellement l'une dans l'autre, du jeu vidéo à son travail actuel de conception visuelle et éditoriale. Sa <a href="https://www.wikidata.org/wiki/Q141191562" target="_blank" rel="noopener" style="color:var(--gold);">fiche Wikidata</a> recense ses activités et ses dépôts à l'INPI.</p>
 

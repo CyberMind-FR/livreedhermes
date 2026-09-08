@@ -31,7 +31,48 @@
     { "@type": "DefinedTerm", "name": "Tissage Jacquard", "description": "Métier à tisser capable de reproduire mécaniquement les motifs engendrés par les carrés magiques du livre.", "inDefinedTermSet": "https://anibal-amiot.com/lexique.html" },
     { "@type": "DefinedTerm", "name": "Livrée", "description": "Habit distinctif porté en signe d'appartenance, dont chaque couleur et motif ont une signification précise plutôt que purement décorative.", "inDefinedTermSet": "https://anibal-amiot.com/lexique.html" },
     { "@type": "DefinedTerm", "name": "Verticalité", "description": "Notion philosophique d'élévation par paliers, chaque forme géométrique se déployant à partir de la précédente, dans la continuité de l'enseignement pythagoricien.", "inDefinedTermSet": "https://anibal-amiot.com/lexique.html" },
-    { "@type": "DefinedTerm", "name": "Maïeutique", "description": "Méthode socratique par laquelle le livre fait émerger une compréhension chez le lecteur plutôt que d'exposer une démonstration achevée.", "inDefinedTermSet": "https://anibal-amiot.com/lexique.html" }
+    { "@type": "DefinedTerm", "name": "Maïeutique", "description": "Méthode socratique par laquelle le livre fait émerger une compréhension chez le lecteur plutôt que d'exposer une démonstration achevée.", "inDefinedTermSet": "https://anibal-amiot.com/lexique.html" },
+    { "@type": "DefinedTerm", "name": "Unified Patterns", "description": "Cellules de tessellation où les coins font écho au centre, afin de générer la fréquence d'un seul motif ; identifiées parmi les grilles équilibrées en 3×12 par l'association d'une seule et même couleur aux deux matrices de 6 éléments.", "inDefinedTermSet": "https://anibal-amiot.com/lexique.html" }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Qu'est-ce que l'arithmogéométrie ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "L'arithmogéométrie est un mélange d'arithmétique et de géométrie, où l'une valide l'autre."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Qu'est-ce que la croix ansée ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "La croix ansée est une méthode de construction des carrés magiques d'ordre 6, développée par l'auteur. Appliquée à une grille 6×6 à quatre couleurs, elle ne permet que deux configurations possibles — un résultat démontré pour l'harmonie 12/12/6/6, et vérifié informatiquement sur l'ensemble des grilles du livre."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Qu'est-ce que la verticalité, dans La Livrée d'Hermès ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "La verticalité s'étudie à travers son lien à la symétrie axiale et centrale apparaissant dans un carré magique d'ordre 6 auto-construit. L'auto-construction d'un carré magique est l'emploi d'une matrice géométrique pour disposer les nombres."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Qu'est-ce que la symétrie axiale et centrale du vivant ?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Ce sont les deux grandes formes de symétrie reconnues en biologie : la symétrie axiale (bilatérale), la plus répandue chez les animaux mobiles, et la symétrie centrale (radiale), présente chez certains organismes marins et chez les plantes."
+      }
+    }
   ]
 }
 </script>
@@ -81,6 +122,17 @@
   .profile-sources a{ color:var(--gold); text-decoration:none; }
   .profile-sources a:hover{ text-decoration:underline; }
 
+  /* ---------- FAQ (accordéon natif <details>, texte présent en HTML pour l'indexation) ---------- */
+  .faq-block{ max-width:64ch; margin:0 auto 40px; text-align:left; }
+  .faq-block-title{ font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--gold); font-weight:400; margin:0 0 16px; text-align:center; }
+  .faq-item{ border-top:1px solid var(--line); padding:14px 0; }
+  .faq-item:last-child{ border-bottom:1px solid var(--line); }
+  .faq-item summary{ cursor:pointer; color:var(--white); font-size:14.5px; list-style:none; display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
+  .faq-item summary::-webkit-details-marker{ display:none; }
+  .faq-item summary .q-mark{ color:var(--gold); font-size:16px; flex-shrink:0; }
+  .faq-item[open] summary .q-mark{ transform:rotate(45deg); display:inline-block; }
+  .faq-item p{ color:var(--dim); font-size:14px; line-height:1.7; margin:12px 0 0; }
+
   /* ---------- pied de page (identique aux autres pages) ---------- */
   .note{ margin-top:60px; padding-top:24px; border-top:1px solid var(--line); text-align:center; }
   .credit-line{
@@ -126,6 +178,8 @@
     header h1{ font-size:19px; letter-spacing:.02em; }
     header p{ font-size:14px; }
     .profile-intro, .profile-section p.profile-text, .profile-sources{ font-size:14.5px; }
+    .faq-item summary{ font-size:15px; }
+    .faq-item p{ font-size:14.5px; }
   }
 
   /* ---------- colonnes latérales décoratives (gif animé, mécanisme repris de la page Articles) ---------- */
@@ -162,6 +216,30 @@
 
   <div class="profile-body">
     <p class="profile-intro">Cette page rassemble les notions qui reviennent le plus souvent sur ce site, expliquées simplement. Chaque terme s'appuie sur le précédent : la lecture dans l'ordre suit le chemin du livre, du fondement philosophique jusqu'à l'objet textile.</p>
+
+    <div class="faq-block">
+      <p class="faq-block-title">Questions fréquentes</p>
+
+      <details class="faq-item">
+        <summary>Qu'est-ce que l'arithmogéométrie ?<span class="q-mark">＋</span></summary>
+        <p>L'arithmogéométrie est un mélange d'arithmétique et de géométrie, où l'une valide l'autre.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Qu'est-ce que la croix ansée ?<span class="q-mark">＋</span></summary>
+        <p>La croix ansée est une méthode de construction des carrés magiques d'ordre 6, développée par l'auteur. Appliquée à une grille 6×6 à quatre couleurs, elle ne permet que deux configurations possibles — un résultat démontré pour l'harmonie 12/12/6/6, et vérifié informatiquement sur l'ensemble des grilles du livre.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Qu'est-ce que la verticalité, dans La Livrée d'Hermès ?<span class="q-mark">＋</span></summary>
+        <p>La verticalité s'étudie à travers son lien à la symétrie axiale et centrale apparaissant dans un carré magique d'ordre 6 auto-construit. L'auto-construction d'un carré magique est l'emploi d'une matrice géométrique pour disposer les nombres.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Qu'est-ce que la symétrie axiale et centrale du vivant ?<span class="q-mark">＋</span></summary>
+        <p>Ce sont les deux grandes formes de symétrie reconnues en biologie : la symétrie axiale (bilatérale), la plus répandue chez les animaux mobiles, et la symétrie centrale (radiale), présente chez certains organismes marins et chez les plantes.</p>
+      </details>
+    </div>
 
     <div class="profile-section">
       <h2>Arithmogéométrie</h2>
