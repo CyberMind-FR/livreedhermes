@@ -1,0 +1,52 @@
+GNU AFFERO GENERAL PUBLIC LICENSE
+Version 3, 19 November 2007
+
+Geometric Steganography System — La Livrée d'Hermès
+Copyright (C) 2026 Anibal Edelberto Amiot
+Contact : anibaledel@gmail.com — anibal-amiot.com
+Wikidata : Q141191562 — Patent : FR2865054
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+-------------------------------------------------------------------------------
+SCOPE OF THIS LICENSE
+
+This license applies to the SOFTWARE (source code, web interface, CLI tools,
+and reference data files referent_256.json and referent_360.json).
+
+This license does NOT cover:
+  - The geometric constructions and arithmetic methodology described in
+    "La Livrée d'Hermès" (Amiot, 2026), which are published separately.
+  - The cryptographic algorithm described in IACR Cryptology ePrint Archive
+    2026 ("Modular Geometric Steganography via Dual Referents"), which is
+    published under Creative Commons Attribution 4.0 (CC BY 4.0).
+  - Personalized referents (custom form tables not included in this repository)
+    which remain trade secrets of the author.
+  - The visual patterns, textile designs, and artistic works published at
+    anibal-amiot.com, which are subject to separate copyright.
+
+COMMERCIAL USE
+
+Use of this software in commercial products, services, or systems
+(including but not limited to: defense applications, security products,
+communication systems, encryption services, or any application generating
+revenue) requires a separate commercial license.
+
+To obtain a commercial license, contact:
+  Anibal Edelberto Amiot
+  anibaledel@gmail.com
+  anibal-amiot.com
+
+The full text of the GNU AGPL v3 is available at:
+https://www.gnu.org/licenses/agpl-3.0.txt

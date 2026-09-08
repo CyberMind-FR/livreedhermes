@@ -1,0 +1,87 @@
+NOTICE — Geometric Steganography System
+La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
+
+===============================================================================
+COPYRIGHT
+
+  Copyright (C) 2026 Anibal Edelberto Amiot
+  Contact : anibaledel@gmail.com
+  Web     : https://anibal-amiot.com
+  Wikidata: Q141191562
+
+===============================================================================
+LICENSE SUMMARY
+
+  Non-commercial use : GNU Affero General Public License v3 (AGPL v3)
+                       See LICENSE
+  Commercial use     : Separate commercial license required
+                       See LICENSE-COMMERCIAL
+
+===============================================================================
+TECHNICAL PRECEDENT
+
+  French patent FR2865054 (filed 2004, granted 2005)
+  "Procédé de composition automatisée d'un motif symbolique à partir d'une
+  relation mathématique" — Process for the automated composition of a symbolic
+  pattern from a mathematical relation.
+  Available: https://patents.google.com/patent/FR2865054A1/fr
+
+  This patent constitutes the direct technical antecedent of the ansate cross
+  method (Referent 256) implemented in this software.
+
+===============================================================================
+PUBLISHED ALGORITHM
+
+  The cryptographic algorithm implemented in this software is described in:
+
+  Amiot, A. E. (2026). "Modular Geometric Steganography via Dual Referents:
+  A 256-Form Table and a 360-Form Table as Independent Reading Masks."
+  IACR Cryptology ePrint Archive. License: CC BY 4.0.
+
+  The algorithm (principle, key architecture, security levels) is freely
+  usable with attribution under CC BY 4.0.
+  This software (code + reference data) is separately licensed under AGPL v3
+  for non-commercial use / commercial license on request.
+
+===============================================================================
+SOURCE MATERIAL
+
+  Referent 256 (referent_256.json):
+  Extracted from "La Livrée d'Hermès" (Amiot, 2026), page 047 (SVG source).
+  256 geometrically distinct forms from the ansate cross method for order-6
+  magic squares. Computationally verified.
+
+  Referent 360 (referent_360.json):
+  Extracted from the KRE-360 Jacquard layer collection (Amiot, 2026).
+  294 forms extracted (of 360 theoretical), structured as 15 harmonic types
+  × 24 cards. The Yi King classification used in the source book is an
+  arbitrary pedagogical protocol; any other classification yielding 360
+  distinct, identifiable forms is equally valid as Referent 360.
+
+===============================================================================
+VERIFICATION
+
+  Computational verifications carried out with Claude (Anthropic),
+  September 2026.
+
+  Verification results:
+  - Referent 256: 256 distinct forms confirmed (SVG analysis of 16×16 grid)
+  - Message encoding/decoding round-trip: verified (ANIBALAMIOTX, LA LIVREE
+    DHERMES, and others)
+  - Key space (standard referents, 60×60 grid): 2^250 bits
+
+===============================================================================
+HISTORICAL NOTE
+
+  The geometric constructions underlying this system were originally developed
+  for research in arithmogeometry and Jacquard textile design over a period of
+  twenty years, starting from a question in juggling and martial arts about
+  how to cover 8 directions while preserving the momentum of movement.
+  The cryptographic application is a structural consequence of the mathematical
+  properties of the geometric forms — not its original purpose.
+
+  "Afin que tous sachent qu'il était sous la protection du dieu, il portait
+  la propre livrée de Mercure, que les clowns avaient faite pour lui."
+  — Thelma Niklaus, cited by Richard Stamelman (on Harlequin)
+
+===============================================================================

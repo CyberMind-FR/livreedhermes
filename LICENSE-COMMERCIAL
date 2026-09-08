@@ -1,0 +1,83 @@
+COMMERCIAL LICENSE AGREEMENT
+Geometric Steganography System — La Livrée d'Hermès
+
+Copyright (C) 2026 Anibal Edelberto Amiot
+All rights reserved.
+
+-------------------------------------------------------------------------------
+PREAMBLE
+
+The open-source version of this software (referent_256.json, referent_360.json,
+stegano_lib.py, encode.py, decode.py, index.html, serve.py) is released under
+the GNU Affero General Public License v3 (AGPL v3) for non-commercial use.
+
+If you intend to use this software or any derivative work in a commercial
+context — including but not limited to:
+
+  • Integration into a commercial product or service
+  • Use in a paid application or platform
+  • Deployment in a defense, intelligence, or security system
+  • Use by a government, military, or intergovernmental organization
+  • Licensing or sublicensing to third parties
+  • Any use generating direct or indirect revenue
+
+— you must obtain a separate commercial license from the author.
+
+-------------------------------------------------------------------------------
+WHAT A COMMERCIAL LICENSE COVERS
+
+A commercial license grants you the right to:
+
+  1. Use, modify, and distribute the software in proprietary or closed-source
+     products without the AGPL copyleft requirements.
+
+  2. Deploy the software in restricted, classified, or non-public environments.
+
+  3. Receive personalized referent tables (custom Referent 256 and/or
+     Referent 360) with your own classification protocols, which are NOT
+     included in the open-source release and constitute independent trade
+     secrets. These custom referents provide security levels from 2^1934
+     to 2^30878 bits (vs. 2^256 for AES-256).
+
+  4. Access technical support and integration assistance from the author.
+
+  5. Priority notification of system updates, security analyses, and
+     forthcoming formal security proofs.
+
+-------------------------------------------------------------------------------
+PRICING
+
+Commercial license terms and pricing are negotiated on a case-by-case basis
+depending on the scope of use, the organization, and the security level required.
+
+-------------------------------------------------------------------------------
+CONTACT
+
+To request a commercial license or discuss terms:
+
+  Anibal Edelberto Amiot
+  Independent researcher and inventor
+  Email  : anibaledel@gmail.com
+  Phone  : +66 6 17 23 54 07
+  Web    : https://anibal-amiot.com
+  Wikidata : Q141191562
+
+-------------------------------------------------------------------------------
+INTELLECTUAL PROPERTY REFERENCES
+
+  Patent FR2865054 (2004) — Process for the automated composition of a
+  symbolic pattern from a mathematical relation. Direct technical antecedent
+  of the ansate cross method.
+
+  IACR Cryptology ePrint Archive (2026) — "Modular Geometric Steganography
+  via Dual Referents: A 256-Form Table and a 360-Form Table as Independent
+  Reading Masks." Published under CC BY 4.0. The algorithm described therein
+  is free to use with attribution; this commercial license covers the SOFTWARE
+  IMPLEMENTATION and CUSTOM REFERENTS, not the algorithm itself.
+
+  La Livrée d'Hermès (Amiot, 2026) — Treatise on arithmogeometry and Jacquard
+  textile design. Available at anibal-amiot.com.
+
+-------------------------------------------------------------------------------
+This document is not a binding contract. A commercial license agreement will
+be issued as a separate legal document upon negotiation with the author.
