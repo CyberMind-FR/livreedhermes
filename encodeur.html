@@ -188,7 +188,7 @@
         <div id="tab-demo" class="enc-tab active">
           <div class="enc-card">
             <h2>Démonstration : message ANIBALAMIOTX</h2>
-            <p class="enc-info-box"><b>ANIBALAMIOTX</b> (12 caractères) est encodé dans une grille 60×60 de nombres aléatoires. Seuls les 12 caractères aux positions désignées par les formes de la Clé 2 portent le message ; les 3588 autres cases sont du bruit indiscernable.</p>
+            <p class="enc-info-box"><b>ANIBALAMIOTX</b> (12 caractères) est encodé dans une grille 60×60 de nombres aléatoires, avec des blocs 6×6 (Clé B). Seuls les caractères aux positions désignées par la forme du Référent 256 mélangé (Clé A), tournée selon la Clé C et sélectionnée par la Clé 2, portent le message — le reste est du bruit indiscernable.</p>
             <button type="button" class="enc-btn" id="btnRunDemo">Lancer la démonstration</button>
             <div id="demo-result" hidden>
               <div class="enc-result-box" id="demo-msg"></div>
@@ -208,16 +208,18 @@
               <div>
                 <label class="enc-label">Taille de grille</label>
                 <select class="enc-select" id="enc-grid">
-                  <option value="60">60×60 (25 blocs) — recommandé</option>
-                  <option value="48">48×48 (16 blocs)</option>
-                  <option value="36">36×36 (9 blocs)</option>
+                  <option value="60">60×60 — recommandé</option>
+                  <option value="48">48×48</option>
+                  <option value="36">36×36</option>
                 </select>
               </div>
               <div>
-                <label class="enc-label">Mode</label>
+                <label class="enc-label">Taille de bloc (Clé B)</label>
                 <select class="enc-select" id="enc-mode">
-                  <option value="256">Référent 256 uniquement</option>
-                  <option value="mixed">Mixte 256+360</option>
+                  <option value="1">6×6 (1 sous-bloc)</option>
+                  <option value="2">12×12 (4 sous-blocs)</option>
+                  <option value="3">18×18 (9 sous-blocs)</option>
+                  <option value="5">30×30 (25 sous-blocs)</option>
                 </select>
               </div>
             </div>
@@ -228,7 +230,7 @@
               <div class="enc-info-box" id="enc-info"></div>
               <div class="enc-row" style="margin-top:14px">
                 <div>
-                  <label class="enc-label">Clé 1 — Grammaire (bits)</label>
+                  <label class="enc-label">Clé A + Clé B</label>
                   <textarea class="enc-textarea" id="enc-key1" readonly></textarea>
                 </div>
                 <div>
@@ -236,10 +238,10 @@
                   <textarea class="enc-textarea" id="enc-grid-out" readonly></textarea>
                 </div>
               </div>
-              <label class="enc-label">Clé 2 — Formes (JSON)</label>
+              <label class="enc-label">Clé C + Clé 2</label>
               <textarea class="enc-textarea" id="enc-key2" readonly style="min-height:70px"></textarea>
               <button type="button" class="enc-btn" id="btnDownloadGrid">⬇ Télécharger la grille CSV</button>
-              <button type="button" class="enc-btn secondary" id="btnDownloadKeys">⬇ Télécharger les clés JSON</button>
+              <button type="button" class="enc-btn secondary" id="btnDownloadKeys">⬇ Télécharger les 4 clés (JSON)</button>
             </div>
           </div>
         </div>
@@ -250,10 +252,8 @@
             <h2>Décoder un message</h2>
             <label class="enc-label">Grille CSV (coller ou charger)</label>
             <textarea class="enc-textarea" id="dec-grid" placeholder="1,23,5,14,2,..."></textarea>
-            <label class="enc-label">Clé 1 — Grammaire (liste de 0/1, séparés par virgule)</label>
-            <input type="text" class="enc-input" id="dec-key1" placeholder="0,0,1,0,...">
-            <label class="enc-label">Clé 2 — Formes (JSON)</label>
-            <textarea class="enc-textarea" id="dec-key2" placeholder='[{"ref":256,"form_id":42,"color":"blue"},...]' style="min-height:70px"></textarea>
+            <label class="enc-label">Les 4 clés (JSON — {keyASeed, keyB, keyC, key2, gridSize})</label>
+            <textarea class="enc-textarea" id="dec-keys" placeholder='{"keyASeed":123,"keyB":[1,1,...],"keyC":[[0,3,...],...],"key2":[{"form_id":42,"color":"blue"},...],"gridSize":60}' style="min-height:110px"></textarea>
             <label class="enc-label">Longueur du message (optionnel)</label>
             <input type="number" class="enc-input" id="dec-len" placeholder="Laisser vide pour tout décoder">
             <button type="button" class="enc-btn" id="btnDecode">Décoder</button>
@@ -265,7 +265,7 @@
             <h2>Charger depuis un fichier</h2>
             <label class="enc-label">Fichier grille CSV</label>
             <input type="file" class="enc-input" id="dec-file-grid" accept=".csv">
-            <label class="enc-label">Fichier clés JSON</label>
+            <label class="enc-label">Fichier des 4 clés (JSON)</label>
             <input type="file" class="enc-input" id="dec-file-keys" accept=".json">
           </div>
         </div>
@@ -287,13 +287,16 @@
         <!-- À PROPOS -->
         <div id="tab-about" class="enc-tab">
           <div class="enc-card enc-about">
-            <h2>Système de stéganographie géométrique par double référent</h2>
+            <h2>Stéganographie géométrique — système à 4 clés</h2>
             <p>Ce système est une application cryptographique des constructions arithmogéométriques développées dans <i>La Livrée d'Hermès</i> (Anibal Edelberto Amiot, 2026). Soumis à l'<a href="https://eprint.iacr.org" target="_blank" rel="noopener">IACR Cryptology ePrint Archive</a> en septembre 2026.</p>
             <div class="enc-info-box">
-              <b>Principe :</b> un message est dissimulé dans une grille de nombres aléatoires. Seul le destinataire disposant des deux clés peut identifier les positions porteuses du message. Sans les clés, la grille est statistiquement indiscernable du bruit aléatoire.<br><br>
-              <b>Référent 256 :</b> 256 formes géométriques distinctes issues de la méthode de construction des carrés magiques d'ordre 6 (croix ansée). Vérifiées informatiquement.<br><br>
-              <b>Référent 360 :</b> 360 formes issues du système Jacquard. Structure : 6 niveaux × 24 cases × 4 colorations × 15 harmonies géométriques. La classification proposée dans le livre est un protocole pédagogique — tout autre protocole produisant 360 formes distinctes est également valide.<br><br>
-              <b>Espace de clés :</b> 2^250 à 2^30878 bits selon le niveau de personnalisation. AES-256 (standard militaire) = 2^256 bits.
+              <b>Principe :</b> un message est dissimulé dans une grille de nombres aléatoires. Seul le destinataire disposant des quatre clés peut identifier les positions porteuses du message. Sans les clés, la grille est statistiquement indiscernable du bruit aléatoire.<br><br>
+              <b>Clé A — mélange du référent :</b> permutation secrète des 256 formes de la croix ansée (≈2^1684 bits).<br><br>
+              <b>Clé B — grammaire des blocs :</b> taille de cellule par bloc — 6×6, 12×12, 18×18 ou 30×30.<br><br>
+              <b>Clé C — orientations :</b> l'une des 8 transformations diédrales (D4 : rotations et miroirs) appliquée à chaque sous-bloc 6×6.<br><br>
+              <b>Clé 2 — formes et couleurs :</b> sélection d'une forme et d'une couleur (bleu/orange) dans le référent mélangé, par bloc.<br><br>
+              <b>Propriété distinctive :</b> une Clé C manquante ou erronée produit une fausse lecture plausible, pas une erreur détectable — le bruit structuré reste indiscernable d'un message valide sans elle.<br><br>
+              <b>Espace de clés :</b> jusqu'à 2^3984 bits pour une grille 60×60 en blocs 12×12 (Clé A 2^1684 · Clé B 2^200 · Clé C 2^1200 · Clé 2 2^900). AES-256 (standard militaire) = 2^256 bits.
             </div>
             <div class="enc-info-box">
               <b>Kerckhoffs :</b> le système respecte le principe de Kerckhoffs (1883) — l'algorithme est entièrement public, le secret repose uniquement sur les clés et, optionnellement, sur des référents personnalisés.<br><br>
@@ -445,7 +448,34 @@
     return ()=>{ s=(s*1664525+1013904223)&0xFFFFFFFF; return (s>>>0)/2**32; };
   }
 
-  function zigzag(B){
+  // ============================================================
+  // Stéganographie géométrique — système à 4 clés (stegano_lib.py porté en JS)
+  // Clé A : mélange secret du Référent 256 (permutation Fisher-Yates seedée).
+  // Clé B : grammaire des tailles de bloc (6/12/18/30 selon k=1/2/3/5).
+  // Clé C : orientations diédrales D4 par sous-bloc 6×6.
+  // Clé 2 : sélection forme + couleur dans le référent mélangé.
+  // Le mélange (Clé A) utilise le RNG seedable de ce fichier (mkRng), pas le
+  // random.Random de Python : cohérent avec l'implémentation JS de référence
+  // déjà fournie pour le bruit de grille, mais non bit-compatible avec le
+  // random.shuffle() du script Python — les deux implémentations sont
+  // indépendamment auto-cohérentes, pas interchangeables clé pour clé.
+  // ============================================================
+  const STEG_ORIENTATIONS = [
+    (r,c,n)=>[r,   c  ],  // 0 identité
+    (r,c,n)=>[c,   n-r],  // 1 rotation 90°
+    (r,c,n)=>[n-r, n-c],  // 2 rotation 180°
+    (r,c,n)=>[n-c, r  ],  // 3 rotation 270°
+    (r,c,n)=>[r,   n-c],  // 4 miroir horizontal
+    (r,c,n)=>[n-r, c  ],  // 5 miroir vertical
+    (r,c,n)=>[c,   r  ],  // 6 miroir diagonale principale
+    (r,c,n)=>[n-c, n-r],  // 7 miroir diagonale secondaire
+  ];
+  function stegApplyOrientation(positions, orient, gridN=5){
+    const t = STEG_ORIENTATIONS[((orient%8)+8)%8];
+    return positions.map(([r,c])=>t(r,c,gridN));
+  }
+
+  function stegZigzagBlocks(B){
     const order=[];
     for(let r=0;r<B;r++){
       if(r%2===0) for(let c=B-1;c>=0;c--) order.push([r,c]);
@@ -454,78 +484,100 @@
     return order;
   }
 
-  function jsEncode(msg, grammarKey, formKey, ref256, ref360, N=60, seed=null){
-    const rng=mkRng(seed);
-    const vr=ALPHABET.length-1;
-    const grid=Array.from({length:N},()=>Array.from({length:N},()=>Math.max(1,Math.floor(rng()*vr+1))));
-    const nums=msg.toUpperCase().split('').map(charToNum);
-    let mi=0;
-    const B=N/12;
-    const order=zigzag(B);
-    for(let bi=0;bi<order.length&&mi<nums.length;bi++){
-      const[br,bc]=order[bi]; const gk=grammarKey[bi]; const fk=formKey[bi];
-      if(gk===0){
-        const f=ref256[fk.form_id%ref256.length];
-        const pos=fk.color==='blue'?f.blue:f.orange;
-        for(const[r,c] of pos){ if(mi>=nums.length)break; grid[br*12+r][bc*12+c]=nums[mi++]; }
-        for(const[r,c] of pos){ if(mi>=nums.length)break; grid[br*12+r][bc*12+6+c]=nums[mi++]; }
-      } else {
-        const f=ref360[fk.form_id%ref360.length];
-        const pos=(f.positions||{})[fk.color]||[];
-        for(const[r,c] of pos){ if(mi>=nums.length)break; grid[br*12+r][bc*12+c]=nums[mi++]; }
+  function stegShuffleReferent(ref, seed){
+    const rng = mkRng(seed);
+    const arr = ref.slice();
+    for(let i=arr.length-1;i>0;i--){
+      const j = Math.floor(rng()*(i+1));
+      const tmp=arr[i]; arr[i]=arr[j]; arr[j]=tmp;
+    }
+    return arr;
+  }
+
+  function stegEncode(message, keyASeed, keyB, keyC, key2, ref256, gridSize=60, valueRange=44, seed=null){
+    const N=gridSize, B=Math.floor(N/6);
+    const rng = mkRng(seed);
+    const grid = Array.from({length:N},()=>Array.from({length:N},()=>Math.floor(rng()*valueRange)+1));
+    const refS = stegShuffleReferent(ref256, keyASeed);
+    const msgNums = message.toUpperCase().split('').map(charToNum);
+    let msgIdx=0;
+    const order = stegZigzagBlocks(B);
+    let posI=0, blockI=0;
+    while(posI<order.length && msgIdx<msgNums.length && blockI<keyB.length){
+      const k=keyB[blockI], fk=key2[blockI], orients=keyC[blockI];
+      const form = refS[fk.form_id % refS.length];
+      const basePos = form[fk.color || 'blue'];
+      for(let sub=0; sub<k*k; sub++){
+        if(posI>=order.length || msgIdx>=msgNums.length) break;
+        const [br,bc]=order[posI];
+        const orient = orients[sub % orients.length];
+        const transformed = stegApplyOrientation(basePos, orient);
+        for(const [r,c] of transformed){
+          if(msgIdx>=msgNums.length) break;
+          const gr=br*6+r, gc=bc*6+c;
+          if(gr>=0 && gr<N && gc>=0 && gc<N){ grid[gr][gc]=msgNums[msgIdx]; msgIdx++; }
+        }
+        posI++;
       }
+      blockI++;
     }
     return grid;
   }
 
-  function jsDecode(grid, grammarKey, formKey, ref256, ref360){
-    const N=grid.length; const B=N/12; const nums=[];
-    for(const[bi,[br,bc]] of zigzag(B).entries()){
-      const gk=grammarKey[bi]; const fk=formKey[bi];
-      if(gk===0){
-        const f=ref256[fk.form_id%ref256.length];
-        const pos=fk.color==='blue'?f.blue:f.orange;
-        for(const[r,c] of pos) nums.push(grid[br*12+r][bc*12+c]);
-        for(const[r,c] of pos) nums.push(grid[br*12+r][bc*12+6+c]);
-      } else {
-        const f=ref360[fk.form_id%ref360.length];
-        const pos=(f.positions||{})[fk.color]||[];
-        for(const[r,c] of pos) nums.push(grid[br*12+r][bc*12+c]);
+  function stegDecode(grid, keyASeed, keyB, keyC, key2, ref256, gridSize=60){
+    const N=gridSize, B=Math.floor(N/6);
+    const refS = stegShuffleReferent(ref256, keyASeed);
+    const nums=[];
+    const order = stegZigzagBlocks(B);
+    let posI=0, blockI=0;
+    while(posI<order.length && blockI<keyB.length){
+      const k=keyB[blockI], fk=key2[blockI], orients=keyC[blockI];
+      const form = refS[fk.form_id % refS.length];
+      const basePos = form[fk.color || 'blue'];
+      for(let sub=0; sub<k*k; sub++){
+        if(posI>=order.length) break;
+        const [br,bc]=order[posI];
+        const orient = orients[sub % orients.length];
+        const transformed = stegApplyOrientation(basePos, orient);
+        for(const [r,c] of transformed){
+          const gr=br*6+r, gc=bc*6+c;
+          if(gr>=0 && gr<N && gc>=0 && gc<N) nums.push(grid[gr][gc]);
+        }
+        posI++;
       }
+      blockI++;
     }
     return nums.map(numToChar).join('');
   }
 
-  function makeKey(msgLen, ref256, ref360, N=60, useRef360=false, seed=null){
-    const rng=mkRng(seed);
-    const B=N/12; const n=B*B;
-    const gk=[], fk=[];
-    for(let i=0;i<n;i++){
-      const g=(useRef360&&rng()>0.5)?1:0;
-      gk.push(g);
-      if(g===0){
-        fk.push({ref:256,form_id:Math.floor(rng()*ref256.length),color:rng()>0.5?'blue':'orange'});
-      } else {
-        const avail=ref360.filter(f=>f.available_colors&&f.available_colors.length>0);
-        const f=avail[Math.floor(rng()*avail.length)];
-        const col=f.available_colors[Math.floor(rng()*f.available_colors.length)];
-        fk.push({ref:360,form_id:f.id,color:col});
-      }
-    }
-    return {gk,fk};
+  function stegMakeKeys(ref256, gridSize=60, blockSize=1, seed=null){
+    const rng = mkRng(seed);
+    const B = Math.floor(gridSize/6);
+    const nBlocks = B*B;
+    const keyASeed = Math.floor(rng()*(2**31));
+    const keyB = Array(nBlocks).fill(blockSize);
+    const keyC = Array.from({length:nBlocks},()=>Array.from({length:blockSize*blockSize},()=>Math.floor(rng()*8)));
+    const key2 = Array.from({length:nBlocks},()=>({form_id:Math.floor(rng()*ref256.length), color: rng()>0.5?'blue':'orange'}));
+    return {keyASeed, keyB, keyC, key2};
   }
 
-  function keyspace(gk, ref256, ref360){
-    const n256=gk.filter(g=>g===0).length, n360=gk.length-n256;
-    const gb=gk.length;
-    const b256=n256*Math.log2(Math.max(1,ref256.length*2));
-    const avgC=ref360.reduce((s,f)=>s+(f.available_colors||[]).length,0)/Math.max(1,ref360.length);
-    const b360=n360*Math.log2(Math.max(1,ref360.length*avgC));
-    return {gb, b256:b256.toFixed(1), b360:b360.toFixed(1), total:(gb+b256+b360).toFixed(1)};
+  function stegKeyspace(keyB, ref256){
+    const nBlocks = keyB.length;
+    const nSub = keyB.reduce((s,k)=>s+k*k,0);
+    let bitsA=0;
+    for(let i=1;i<=ref256.length;i++) bitsA += Math.log2(i);
+    const bitsB = Math.log2(4)*nBlocks;
+    const bitsC = Math.log2(8)*nSub;
+    const bits2 = Math.log2(ref256.length*2)*nBlocks;
+    const total = bitsA+bitsB+bitsC+bits2;
+    return {
+      keyA: Math.round(bitsA), keyB: Math.round(bitsB), keyC: Math.round(bitsC), key2: Math.round(bits2),
+      total: Math.round(total), vsAes256: Math.round(total-256),
+    };
   }
 
-  function drawGrid(grid, gk, fk, ref256, ref360, canvasId){
-    const N=grid.length, B=N/12;
+  function stegDrawGrid(grid, keyASeed, keyBArr, keyC, key2, ref256, canvasId){
+    const N=grid.length, B=Math.floor(N/6);
     const cs=8;
     const canvas=document.getElementById(canvasId);
     canvas.width=N*cs; canvas.height=N*cs;
@@ -537,68 +589,73 @@
       ctx.fillStyle=`rgb(${g},${g},${g-6})`;
       ctx.fillRect(c*cs,r*cs,cs-1,cs-1);
     }
-    const order=zigzag(B);
-    for(let bi=0;bi<order.length;bi++){
-      const[br,bc]=order[bi]; const g=gk[bi]; const f=fk[bi];
-      let positions=[];
-      if(g===0){
-        const form=ref256[f.form_id%ref256.length];
-        const pos=f.color==='blue'?form.blue:form.orange;
-        for(const[r,c] of pos){ positions.push([br*12+r,bc*12+c]); positions.push([br*12+r,bc*12+6+c]); }
-        ctx.fillStyle='rgba(201,161,90,0.85)';
-      } else {
-        const form=ref360[f.form_id%ref360.length];
-        positions=((form.positions||{})[f.color]||[]).map(([r,c])=>[br*12+r,bc*12+c]);
-        ctx.fillStyle='rgba(224,38,27,0.85)';
+    const refS = stegShuffleReferent(ref256, keyASeed);
+    const order = stegZigzagBlocks(B);
+    let posI=0, blockI=0;
+    while(posI<order.length && blockI<keyBArr.length){
+      const k=keyBArr[blockI], fk=key2[blockI], orients=keyC[blockI];
+      const form = refS[fk.form_id % refS.length];
+      const basePos = form[fk.color || 'blue'];
+      ctx.fillStyle = fk.color==='blue' ? 'rgba(201,161,90,0.85)' : 'rgba(224,38,27,0.85)';
+      for(let sub=0; sub<k*k; sub++){
+        if(posI>=order.length) break;
+        const [br,bc]=order[posI];
+        const orient = orients[sub % orients.length];
+        const transformed = stegApplyOrientation(basePos, orient);
+        for(const [r,c] of transformed){
+          const gr=br*6+r, gc=bc*6+c;
+          if(gr>=0 && gr<N && gc>=0 && gc<N) ctx.fillRect(gc*cs,gr*cs,cs-1,cs-1);
+        }
+        posI++;
       }
-      for(const[r,c] of positions) ctx.fillRect(c*cs,r*cs,cs-1,cs-1);
+      blockI++;
     }
     ctx.strokeStyle='rgba(242,242,240,0.15)'; ctx.lineWidth=0.5;
     for(let b=0;b<=B;b++){
-      ctx.beginPath(); ctx.moveTo(b*12*cs,0); ctx.lineTo(b*12*cs,N*cs); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0,b*12*cs); ctx.lineTo(N*cs,b*12*cs); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(b*6*cs,0); ctx.lineTo(b*6*cs,N*cs); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,b*6*cs); ctx.lineTo(N*cs,b*6*cs); ctx.stroke();
     }
   }
 
-  let _lastGrid=null, _lastGk=null, _lastFk=null;
+  let _lastGrid=null, _lastKeys=null;
 
   function runDemo(){
-    if(!REF256||!REF360) return;
+    if(!REF256) return;
     const msg='ANIBALAMIOTX';
-    const {gk,fk}=makeKey(msg.length,REF256,REF360,60,false,42);
-    const grid=jsEncode(msg,gk,fk,REF256,REF360,60,42);
-    const decoded=jsDecode(grid,gk,fk,REF256,REF360).substring(0,msg.length);
-    const ks=keyspace(gk,REF256,REF360);
-    _lastGrid=grid; _lastGk=gk; _lastFk=fk;
+    const {keyASeed, keyB, keyC, key2} = stegMakeKeys(REF256, 60, 1, 42);
+    const grid = stegEncode(msg, keyASeed, keyB, keyC, key2, REF256, 60, 44, 42);
+    const decoded = stegDecode(grid, keyASeed, keyB, keyC, key2, REF256, 60).substring(0, msg.length);
+    const ks = stegKeyspace(keyB, REF256);
+    _lastGrid=grid; _lastKeys={keyASeed, keyB, keyC, key2, gridSize:60};
     document.getElementById('demo-result').hidden=false;
     document.getElementById('demo-msg').innerHTML=
       `<div>Message encodé : <span class="enc-msg">${msg}</span></div>
        <div style="margin-top:6px">Décodé : <span class="enc-msg">${decoded}</span> — identique : ${decoded===msg}</div>`;
     document.getElementById('demo-ks').innerHTML=
-      `<b>Espace de clés</b> (grille 60×60, Référent 256 uniquement) : 2^${ks.total} bits<br>
+      `<b>Espace de clés</b> (blocs 6×6, grille 60×60) : Clé A 2^${ks.keyA} · Clé B 2^${ks.keyB} · Clé C 2^${ks.keyC} · Clé 2 2^${ks.key2} = <b>2^${ks.total} bits</b><br>
        AES-256 (standard militaire) : 2^256 bits
-       <div class="keyspace-bar">2^${ks.total} bits — entre AES-192 et AES-256</div>`;
-    drawGrid(grid,gk,fk,REF256,REF360,'demo-canvas');
+       <div class="keyspace-bar">2^${ks.total} bits — largement au-delà d'AES-256</div>`;
+    stegDrawGrid(grid, keyASeed, keyB, keyC, key2, REF256, 'demo-canvas');
   }
 
   function encodeMessage(){
-    if(!REF256||!REF360) return;
+    if(!REF256) return;
     const msg=document.getElementById('enc-message').value.trim().toUpperCase();
-    if(!msg){ alert('Entrez un message.'); return; }
+    if(!msg){ document.getElementById('enc-info').textContent='Entrez un message.'; return; }
     const N=parseInt(document.getElementById('enc-grid').value);
-    const useRef360=document.getElementById('enc-mode').value==='mixed';
+    const blockSize=parseInt(document.getElementById('enc-mode').value);
     const seedVal=document.getElementById('enc-seed').value.trim();
     const seed=seedVal?parseInt(seedVal):null;
-    const {gk,fk}=makeKey(msg.length,REF256,REF360,N,useRef360,seed);
-    const grid=jsEncode(msg,gk,fk,REF256,REF360,N,seed);
-    _lastGrid=grid; _lastGk=gk; _lastFk=fk;
-    const ks=keyspace(gk,REF256,REF360);
+    const {keyASeed, keyB, keyC, key2} = stegMakeKeys(REF256, N, blockSize, seed);
+    const grid = stegEncode(msg, keyASeed, keyB, keyC, key2, REF256, N, 44, seed);
+    _lastGrid=grid; _lastKeys={keyASeed, keyB, keyC, key2, gridSize:N};
+    const ks = stegKeyspace(keyB, REF256);
     document.getElementById('enc-result').hidden=false;
     document.getElementById('enc-info').innerHTML=
-      `Message « ${msg} » encodé dans une grille ${N}×${N}<br>
-       Espace de clés : 2^${ks.total} bits (Grammaire 2^${ks.gb} · Ref256 2^${ks.b256} · Ref360 2^${ks.b360})`;
-    document.getElementById('enc-key1').value=gk.join(',');
-    document.getElementById('enc-key2').value=JSON.stringify(fk);
+      `Message « ${msg} » encodé dans une grille ${N}×${N} (blocs ${blockSize*6}×${blockSize*6})<br>
+       Espace de clés : 2^${ks.total} bits (Clé A 2^${ks.keyA} · Clé B 2^${ks.keyB} · Clé C 2^${ks.keyC} · Clé 2 2^${ks.key2})`;
+    document.getElementById('enc-key1').value = 'Clé A (graine de mélange) : ' + keyASeed + '\nClé B (tailles) : ' + JSON.stringify(keyB);
+    document.getElementById('enc-key2').value = 'Clé C (orientations) : ' + JSON.stringify(keyC) + '\nClé 2 (formes+couleurs) : ' + JSON.stringify(key2);
     const csvLines=grid.slice(0,5).map(r=>r.join(',')).join('\n')+'\n...';
     document.getElementById('enc-grid-out').value=csvLines;
   }
@@ -610,29 +667,30 @@
     a.download='grille_steganographique.csv'; a.click();
   }
   function downloadKeys(){
-    if(!_lastGk) return;
-    const keys={grammar_key:_lastGk,form_key:_lastFk,grid_size:_lastGrid.length};
-    const blob=new Blob([JSON.stringify(keys,null,2)],{type:'application/json'});
+    if(!_lastKeys) return;
+    const blob=new Blob([JSON.stringify(_lastKeys,null,2)],{type:'application/json'});
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
     a.download='cles_steganographiques.json'; a.click();
   }
 
   function decodeMessage(){
-    if(!REF256||!REF360) return;
+    if(!REF256) return;
+    const resultEl = document.getElementById('dec-msg');
     const csvStr=document.getElementById('dec-grid').value.trim();
-    const key1Str=document.getElementById('dec-key1').value.trim();
-    const key2Str=document.getElementById('dec-key2').value.trim();
+    const keysStr=document.getElementById('dec-keys').value.trim();
     const lenVal=document.getElementById('dec-len').value.trim();
-    if(!csvStr||!key1Str||!key2Str){ alert('Remplir tous les champs.'); return; }
+    if(!csvStr||!keysStr){ resultEl.textContent='Remplis la grille et les clés.'; document.getElementById('dec-result').hidden=false; return; }
     try{
       const grid=csvStr.split('\n').map(r=>r.split(',').map(Number));
-      const gk=key1Str.split(',').map(Number);
-      const fk=JSON.parse(key2Str);
-      let msg=jsDecode(grid,gk,fk,REF256,REF360);
+      const keys=JSON.parse(keysStr);
+      let msg=stegDecode(grid, keys.keyASeed, keys.keyB, keys.keyC, keys.key2, REF256, keys.gridSize || grid.length);
       if(lenVal) msg=msg.substring(0,parseInt(lenVal));
       document.getElementById('dec-result').hidden=false;
-      document.getElementById('dec-msg').innerHTML=`Message décodé : <span class="enc-msg">${msg}</span>`;
-    } catch(e){ alert('Erreur : '+e.message); }
+      resultEl.innerHTML=`Message décodé : <span class="enc-msg">${msg}</span>`;
+    } catch(e){
+      document.getElementById('dec-result').hidden=false;
+      resultEl.textContent='Erreur : '+e.message;
+    }
   }
   function loadGridFile(input){
     if(!input.files[0]) return;
@@ -643,11 +701,7 @@
   function loadKeysFile(input){
     if(!input.files[0]) return;
     const fr=new FileReader();
-    fr.onload=e=>{
-      const k=JSON.parse(e.target.result);
-      document.getElementById('dec-key1').value=k.grammar_key.join(',');
-      document.getElementById('dec-key2').value=JSON.stringify(k.form_key);
-    };
+    fr.onload=e=>{ document.getElementById('dec-keys').value=e.target.result; };
     fr.readAsText(input.files[0]);
   }
 
