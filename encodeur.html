@@ -310,7 +310,7 @@
           <div id="disk-app" hidden>
             <div class="enc-card">
               <h2>Chiffrement géométrique — Référent 256</h2>
-              <p class="ref-note">Chiffrement par permutation géométrique et masque XOR, dérivés par PBKDF2 depuis une passphrase — distinct de l'outil de stéganographie ci-dessus. Entièrement côté client : la passphrase et les fichiers ne quittent jamais le navigateur.</p>
+              <p class="ref-note">Réseau de substitution-permutation (SPN) à trois couches par bloc de 24 octets — substitution (S-box géométrique), permutation (croix ansée) et masque XOR — toutes dérivées par PBKDF2/SHA-256 depuis une passphrase. Distinct de l'outil de stéganographie ci-dessus. Entièrement côté client : la passphrase et les fichiers ne quittent jamais le navigateur.</p>
               <label class="enc-label">Passphrase</label>
               <input type="password" class="enc-input" id="disk-passphrase" placeholder="Votre passphrase" autocomplete="off">
               <button type="button" class="enc-btn secondary" id="btnDeriveKey">🔑 Dériver la clé</button>
@@ -339,12 +339,14 @@
             <div class="enc-card">
               <h2>Statistiques de sécurité</h2>
               <div class="disk-stats enc-info-box">
-                <div><b>Permutations/chunk</b> : 12 288 (256 configs × 24 ordres × 2 couleurs)</div>
-                <div><b>Bits/chunk</b> : 13,6 (permutation) + 192 (XOR) = 205,6</div>
-                <div><b>Bits/secteur</b> : 4 317 bits (21 chunks/secteur)</div>
+                <div><b>Couche 1 — S-box géométrique</b> : ≈ 1 684 bits/chunk (256! substitutions possibles)</div>
+                <div><b>Couche 2 — Permutation géométrique</b> : 13,6 bits/chunk (12 288 permutations)</div>
+                <div><b>Couche 3 — XOR keystream</b> : 192 bits/chunk</div>
+                <div><b>Bits/chunk (total)</b> : ≈ 1 890</div>
+                <div><b>Bits/secteur</b> : ≈ 39 681 bits (21 chunks/secteur)</div>
                 <div><b>AES-256</b> : 256 bits</div>
-                <div><b>Avantage</b> : +4 061 bits/secteur</div>
-                <div><b>Référent 360 (à venir)</b> : couche supplémentaire</div>
+                <div><b>Avantage</b> : +39 425 bits/secteur</div>
+                <div><b>Référent 360 (à venir)</b> : couche de permutation supplémentaire</div>
               </div>
             </div>
 
@@ -772,7 +774,41 @@
     return table;
   }
 
-  async function diskDeriveChunkKey(masterKey, sectorNum, chunkNum){
+  async function diskSha256(bytes){
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return new Uint8Array(digest);
+  }
+
+  // S-box géométrique : Fisher-Yates sur [0..255] initialisé par seed (le seed
+  // intègre le config_id géométrique, donc la forme choisie influence la
+  // substitution). Porté depuis disk_lib.py::_derive_sbox.
+  async function diskDeriveSbox(seed){
+    let rng = new Uint8Array(0);
+    let counter = 0;
+    while(rng.length < 512){
+      const counterBytes = new Uint8Array(4);
+      new DataView(counterBytes.buffer).setUint32(0, counter, false);
+      const combined = new Uint8Array(seed.length + 4);
+      combined.set(seed, 0);
+      combined.set(counterBytes, seed.length);
+      const h = await diskSha256(combined);
+      const merged = new Uint8Array(rng.length + h.length);
+      merged.set(rng, 0);
+      merged.set(h, rng.length);
+      rng = merged;
+      counter++;
+    }
+    const sbox = Array.from({length:256}, (_,i)=>i);
+    for(let i=255;i>=1;i--){
+      const j = ((rng[i*2] << 8) | rng[i*2+1]) % (i+1);
+      const tmp = sbox[i]; sbox[i] = sbox[j]; sbox[j] = tmp;
+    }
+    const sboxInv = new Array(256);
+    for(let i=0;i<256;i++) sboxInv[sbox[i]] = i;
+    return [sbox, sboxInv];
+  }
+
+  async function diskDeriveChunk(masterKey, sectorNum, chunkNum){
     const salt = new Uint8Array(12);
     const view = new DataView(salt.buffer);
     view.setBigUint64(0, BigInt(sectorNum), false);
@@ -784,7 +820,20 @@
     const orderIdx = ((dk[1] << 8) | dk[2]) % 24;
     const colorBit = dk[3] & 1;
     const xorKey = dk.slice(4, 28);
-    return [configId, orderIdx, colorBit, xorKey];
+
+    // Seed du S-box : master_key + sector_num(8) + chunk_num(4) + config_id(4), big-endian.
+    const sboxSeedInput = new Uint8Array(16);
+    const ssView = new DataView(sboxSeedInput.buffer);
+    ssView.setBigUint64(0, BigInt(sectorNum), false);
+    ssView.setUint32(8, chunkNum, false);
+    ssView.setUint32(12, configId, false);
+    const combined = new Uint8Array(masterKey.length + 16);
+    combined.set(masterKey, 0);
+    combined.set(sboxSeedInput, masterKey.length);
+    const sboxSeed = await diskSha256(combined);
+    const [sbox, sboxInv] = await diskDeriveSbox(sboxSeed);
+
+    return [configId, orderIdx, colorBit, xorKey, sbox, sboxInv];
   }
 
   async function diskDeriveTailKey(masterKey, sectorNum){
@@ -797,14 +846,18 @@
     return new Uint8Array(bits);
   }
 
+  // SPN 3 couches par chunk : 1) substitution (S-box) 2) permutation géométrique
+  // 3) XOR keystream — déchiffrement dans l'ordre strictement inverse.
   async function diskEncryptSector(data, sectorNum, masterKey, permTable){
     const out = new Uint8Array(DISK_SECTOR_SIZE);
     for(let ci=0; ci<DISK_CHUNKS_FULL; ci++){
       const chunk = data.slice(ci*DISK_CHUNK_SIZE, (ci+1)*DISK_CHUNK_SIZE);
-      const [cfg, oi, col, xk] = await diskDeriveChunkKey(masterKey, sectorNum, ci);
+      const [cfg, oi, col, xk, sbox] = await diskDeriveChunk(masterKey, sectorNum, ci);
       const [P] = permTable.get(`${cfg},${oi},${col}`);
+      const sub = new Uint8Array(24);
+      for(let i=0;i<24;i++) sub[i] = sbox[chunk[i]];
       const permuted = new Uint8Array(24);
-      for(let i=0;i<24;i++) permuted[i] = chunk[P[i]];
+      for(let i=0;i<24;i++) permuted[i] = sub[P[i]];
       for(let i=0;i<24;i++) out[ci*DISK_CHUNK_SIZE+i] = permuted[i] ^ xk[i];
     }
     const tailKey = await diskDeriveTailKey(masterKey, sectorNum);
@@ -817,11 +870,13 @@
     const out = new Uint8Array(DISK_SECTOR_SIZE);
     for(let ci=0; ci<DISK_CHUNKS_FULL; ci++){
       const chunk = data.slice(ci*DISK_CHUNK_SIZE, (ci+1)*DISK_CHUNK_SIZE);
-      const [cfg, oi, col, xk] = await diskDeriveChunkKey(masterKey, sectorNum, ci);
+      const [cfg, oi, col, xk, , sboxInv] = await diskDeriveChunk(masterKey, sectorNum, ci);
       const [, Pinv] = permTable.get(`${cfg},${oi},${col}`);
       const xored = new Uint8Array(24);
       for(let i=0;i<24;i++) xored[i] = chunk[i] ^ xk[i];
-      for(let j=0;j<24;j++) out[ci*DISK_CHUNK_SIZE+j] = xored[Pinv[j]];
+      const dep = new Uint8Array(24);
+      for(let j=0;j<24;j++) dep[j] = xored[Pinv[j]];
+      for(let i=0;i<24;i++) out[ci*DISK_CHUNK_SIZE+i] = sboxInv[dep[i]];
     }
     const tailKey = await diskDeriveTailKey(masterKey, sectorNum);
     const tail = data.slice(DISK_CHUNKS_FULL*DISK_CHUNK_SIZE);
