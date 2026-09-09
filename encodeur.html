@@ -100,6 +100,23 @@
   .enc-about p{ font-size:13.5px; line-height:1.8; margin:0 0 14px; color:var(--dim); }
   .enc-about a{ color:var(--gold); text-decoration:none; }
   .enc-about a:hover{ text-decoration:underline; }
+
+  /* ---------- onglet Chiffrement ---------- */
+  .disk-status{ text-align:center; color:var(--dim); font-size:13px; font-style:italic; padding:16px 0; }
+  .disk-file-info{ font-size:12px; color:var(--dim); opacity:.85; margin-top:8px; }
+  .enc-progress{ height:8px; border:1px solid var(--line); margin-top:14px; overflow:hidden; display:none; }
+  .enc-progress.active{ display:block; }
+  .enc-progress-bar{ height:100%; width:0%; background:var(--gold); transition:width .15s linear; }
+  .disk-fingerprint{ font-family:monospace; font-size:12px; color:var(--gold); margin-top:10px; word-break:break-all; }
+  .disk-stats div{ margin-bottom:6px; }
+  .disk-stats div:last-child{ margin-bottom:0; }
+  .disk-stats b{ color:var(--gold); font-weight:400; }
+  .license-box{ border-top:1px solid var(--line); margin-top:24px; padding-top:18px; font-size:12px; color:var(--dim); line-height:1.7; }
+  .license-box h4{ color:var(--gold); font-weight:400; font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:0 0 10px; }
+  .license-box p{ margin:0 0 10px; }
+  .license-box p:last-child{ margin-bottom:0; opacity:.75; font-size:11px; }
+  .license-box a{ color:var(--gold); text-decoration:none; }
+  .license-box a:hover{ text-decoration:underline; }
   .iacr-mention{ max-width:64ch; margin:30px auto 0; text-align:center; font-size:11px; color:var(--dim); opacity:.8; line-height:1.7; border-top:1px solid var(--line); padding-top:18px; }
   .iacr-mention a{ color:var(--gold); text-decoration:none; }
   .iacr-mention a:hover{ text-decoration:underline; }
@@ -164,6 +181,7 @@
           <button type="button" data-tab="decoder">🔓 Décoder</button>
           <button type="button" data-tab="referents">📐 Référents</button>
           <button type="button" data-tab="about">📖 À propos</button>
+          <button type="button" data-tab="disk">💾 Chiffrement</button>
         </nav>
 
         <!-- DÉMO -->
@@ -281,6 +299,60 @@
               <b>Kerckhoffs :</b> le système respecte le principe de Kerckhoffs (1883) — l'algorithme est entièrement public, le secret repose uniquement sur les clés et, optionnellement, sur des référents personnalisés.<br><br>
               <b>Brevet antécédent :</b> <a href="https://patents.google.com/patent/FR2865054A1/fr" target="_blank" rel="noopener">FR2865054</a> (2004) — composition automatisée d'un motif symbolique à partir d'une relation mathématique.<br><br>
               <b>Contact :</b> anibaledel@gmail.com · <a href="https://anibal-amiot.com" target="_blank" rel="noopener">anibal-amiot.com</a> · Wikidata <a href="https://www.wikidata.org/wiki/Q141191562" target="_blank" rel="noopener">Q141191562</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- CHIFFREMENT (Référent 256) -->
+        <div id="tab-disk" class="enc-tab">
+          <div id="disk-init-status" class="disk-status">Initialisation de la table de permutation…</div>
+
+          <div id="disk-app" hidden>
+            <div class="enc-card">
+              <h2>Chiffrement géométrique — Référent 256</h2>
+              <p class="ref-note">Chiffrement par permutation géométrique et masque XOR, dérivés par PBKDF2 depuis une passphrase — distinct de l'outil de stéganographie ci-dessus. Entièrement côté client : la passphrase et les fichiers ne quittent jamais le navigateur.</p>
+              <label class="enc-label">Passphrase</label>
+              <input type="password" class="enc-input" id="disk-passphrase" placeholder="Votre passphrase" autocomplete="off">
+              <button type="button" class="enc-btn secondary" id="btnDeriveKey">🔑 Dériver la clé</button>
+              <div id="disk-fingerprint" class="disk-fingerprint"></div>
+            </div>
+
+            <div class="enc-card">
+              <h2>Chiffrer un fichier</h2>
+              <label class="enc-label">Fichier à chiffrer</label>
+              <input type="file" class="enc-input" id="disk-file-encrypt">
+              <div class="disk-file-info" id="disk-encrypt-info"></div>
+              <button type="button" class="enc-btn" id="btnDiskEncrypt">Chiffrer →</button>
+              <div class="enc-progress" id="disk-encrypt-progress"><div class="enc-progress-bar" id="disk-encrypt-progress-bar"></div></div>
+            </div>
+
+            <div class="enc-card">
+              <h2>Déchiffrer un fichier</h2>
+              <label class="enc-label">Fichier .lldh à déchiffrer</label>
+              <input type="file" class="enc-input" id="disk-file-decrypt" accept=".lldh">
+              <div class="disk-file-info" id="disk-decrypt-info"></div>
+              <button type="button" class="enc-btn" id="btnDiskDecrypt">Déchiffrer →</button>
+              <div class="enc-progress" id="disk-decrypt-progress"><div class="enc-progress-bar" id="disk-decrypt-progress-bar"></div></div>
+              <p class="ref-note" style="margin-top:12px">Si la clé est incorrecte, le fichier déchiffré sera du bruit, sans erreur détectable (pas de MAC dans cette version — prévu avec le Référent 360).</p>
+            </div>
+
+            <div class="enc-card">
+              <h2>Statistiques de sécurité</h2>
+              <div class="disk-stats enc-info-box">
+                <div><b>Permutations/chunk</b> : 12 288 (256 configs × 24 ordres × 2 couleurs)</div>
+                <div><b>Bits/chunk</b> : 13,6 (permutation) + 192 (XOR) = 205,6</div>
+                <div><b>Bits/secteur</b> : 4 317 bits (21 chunks/secteur)</div>
+                <div><b>AES-256</b> : 256 bits</div>
+                <div><b>Avantage</b> : +4 061 bits/secteur</div>
+                <div><b>Référent 360 (à venir)</b> : couche supplémentaire</div>
+              </div>
+            </div>
+
+            <div class="license-box">
+              <h4>Licence</h4>
+              <p>Ce logiciel est distribué sous <a href="https://github.com/anibaledel/livreedhermes/blob/main/LICENSE" target="_blank" rel="noopener">GNU AGPL v3</a> pour usage non-commercial.</p>
+              <p>Usage commercial (intégration produit, application défense, service payant) : <a href="mailto:anibaledel@gmail.com">anibaledel@gmail.com</a> — voir aussi la <a href="https://github.com/anibaledel/livreedhermes/blob/main/LICENSE-COMMERCIAL" target="_blank" rel="noopener">licence commerciale</a>.</p>
+              <p>Algorithme décrit dans l'<a href="https://eprint.iacr.org" target="_blank" rel="noopener">IACR ePrint 2026</a> (CC BY) · Brevet antécédent : <a href="https://patents.google.com/patent/FR2865054A1/fr" target="_blank" rel="noopener">FR2865054</a> · Wikidata <a href="https://www.wikidata.org/wiki/Q141191562" target="_blank" rel="noopener">Q141191562</a></p>
             </div>
           </div>
         </div>
@@ -639,9 +711,221 @@
       REF360 = r360;
       document.getElementById('encLoading').hidden = true;
       document.getElementById('encApp').hidden = false;
+      // Table de permutation du chiffrement disque : précalculée une seule fois
+      // ici, juste après le chargement du Référent 256, avant toute opération.
+      diskPermTable = await buildPermTable(REF256);
+      document.getElementById('disk-init-status').hidden = true;
+      document.getElementById('disk-app').hidden = false;
     }catch(e){
       document.getElementById('encLoading').textContent = "Erreur de chargement des référents — réessaie de recharger la page.";
     }
+  }
+
+  // ============================================================
+  // Chiffrement géométrique de fichiers — Référent 256 (disk_lib.py porté en JS)
+  // ============================================================
+  let diskPermTable = null;
+  let diskMasterKey = null;
+
+  const DISK_SECTOR_SIZE = 512;
+  const DISK_CHUNK_SIZE  = 24;
+  const DISK_CHUNKS_FULL = 21;  // Math.floor(512/24)
+  const DISK_TAIL_SIZE   = 8;   // 512 % 24
+
+  const DISK_ALL_ORDERS = (() => {
+    const perms = [];
+    const a = [0,1,2,3];
+    function permute(arr, l=0){
+      if(l === arr.length){ perms.push([...arr]); return; }
+      for(let i=l;i<arr.length;i++){
+        [arr[l],arr[i]]=[arr[i],arr[l]];
+        permute(arr,l+1);
+        [arr[l],arr[i]]=[arr[i],arr[l]];
+      }
+    }
+    permute(a); return perms;
+  })();
+  const DISK_OFFSETS_12 = [[0,0],[0,6],[6,0],[6,6]];
+
+  function diskBuildPerm(form, colorKey, order){
+    const seqAbs=[];
+    for(const slot of order){
+      const [dr,dc]=DISK_OFFSETS_12[slot];
+      for(const [r,c] of form[colorKey]) seqAbs.push(r*12+c);
+    }
+    const P = Array.from({length:24},(_,i)=>i).sort((a,b)=>seqAbs[a]-seqAbs[b]);
+    const Pinv = new Array(24);
+    P.forEach((p,i)=>{ Pinv[p]=i; });
+    return [P, Pinv];
+  }
+
+  async function buildPermTable(ref256){
+    const table = new Map();
+    for(const form of ref256){
+      for(let oi=0; oi<DISK_ALL_ORDERS.length; oi++){
+        for(const [col, ck] of [[0,'blue'],[1,'orange']]){
+          const [P, Pinv] = diskBuildPerm(form, ck, DISK_ALL_ORDERS[oi]);
+          table.set(`${form.id},${oi},${col}`, [P, Pinv]);
+        }
+      }
+    }
+    return table;
+  }
+
+  async function diskDeriveChunkKey(masterKey, sectorNum, chunkNum){
+    const salt = new Uint8Array(12);
+    const view = new DataView(salt.buffer);
+    view.setBigUint64(0, BigInt(sectorNum), false);
+    view.setUint32(8, chunkNum, false);
+    const keyMaterial = await crypto.subtle.importKey('raw', masterKey, {name:'PBKDF2'}, false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:1000, hash:'SHA-256'}, keyMaterial, 224);
+    const dk = new Uint8Array(bits);
+    const configId = dk[0] % 256;
+    const orderIdx = ((dk[1] << 8) | dk[2]) % 24;
+    const colorBit = dk[3] & 1;
+    const xorKey = dk.slice(4, 28);
+    return [configId, orderIdx, colorBit, xorKey];
+  }
+
+  async function diskDeriveTailKey(masterKey, sectorNum){
+    const salt = new Uint8Array(12);
+    const view = new DataView(salt.buffer);
+    view.setBigUint64(0, BigInt(sectorNum), false);
+    view.setUint32(8, 99, false);
+    const keyMaterial = await crypto.subtle.importKey('raw', masterKey, {name:'PBKDF2'}, false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:1000, hash:'SHA-256'}, keyMaterial, DISK_TAIL_SIZE*8);
+    return new Uint8Array(bits);
+  }
+
+  async function diskEncryptSector(data, sectorNum, masterKey, permTable){
+    const out = new Uint8Array(DISK_SECTOR_SIZE);
+    for(let ci=0; ci<DISK_CHUNKS_FULL; ci++){
+      const chunk = data.slice(ci*DISK_CHUNK_SIZE, (ci+1)*DISK_CHUNK_SIZE);
+      const [cfg, oi, col, xk] = await diskDeriveChunkKey(masterKey, sectorNum, ci);
+      const [P] = permTable.get(`${cfg},${oi},${col}`);
+      const permuted = new Uint8Array(24);
+      for(let i=0;i<24;i++) permuted[i] = chunk[P[i]];
+      for(let i=0;i<24;i++) out[ci*DISK_CHUNK_SIZE+i] = permuted[i] ^ xk[i];
+    }
+    const tailKey = await diskDeriveTailKey(masterKey, sectorNum);
+    const tail = data.slice(DISK_CHUNKS_FULL*DISK_CHUNK_SIZE);
+    for(let i=0;i<DISK_TAIL_SIZE;i++) out[DISK_CHUNKS_FULL*DISK_CHUNK_SIZE+i] = tail[i] ^ tailKey[i];
+    return out;
+  }
+
+  async function diskDecryptSector(data, sectorNum, masterKey, permTable){
+    const out = new Uint8Array(DISK_SECTOR_SIZE);
+    for(let ci=0; ci<DISK_CHUNKS_FULL; ci++){
+      const chunk = data.slice(ci*DISK_CHUNK_SIZE, (ci+1)*DISK_CHUNK_SIZE);
+      const [cfg, oi, col, xk] = await diskDeriveChunkKey(masterKey, sectorNum, ci);
+      const [, Pinv] = permTable.get(`${cfg},${oi},${col}`);
+      const xored = new Uint8Array(24);
+      for(let i=0;i<24;i++) xored[i] = chunk[i] ^ xk[i];
+      for(let j=0;j<24;j++) out[ci*DISK_CHUNK_SIZE+j] = xored[Pinv[j]];
+    }
+    const tailKey = await diskDeriveTailKey(masterKey, sectorNum);
+    const tail = data.slice(DISK_CHUNKS_FULL*DISK_CHUNK_SIZE);
+    for(let i=0;i<DISK_TAIL_SIZE;i++) out[DISK_CHUNKS_FULL*DISK_CHUNK_SIZE+i] = tail[i] ^ tailKey[i];
+    return out;
+  }
+
+  async function diskEncryptFile(fileData, masterKey, permTable, onProgress){
+    const originalLen = fileData.byteLength;
+    const padLen = (DISK_SECTOR_SIZE - originalLen % DISK_SECTOR_SIZE) % DISK_SECTOR_SIZE;
+    const padded = new Uint8Array(originalLen + padLen);
+    padded.set(new Uint8Array(fileData));
+    const nSectors = padded.length / DISK_SECTOR_SIZE;
+    const outBuf = new Uint8Array(8 + nSectors * DISK_SECTOR_SIZE);
+    new DataView(outBuf.buffer).setBigUint64(0, BigInt(originalLen), false);
+    for(let s=0; s<nSectors; s++){
+      const sector = padded.slice(s*DISK_SECTOR_SIZE, (s+1)*DISK_SECTOR_SIZE);
+      const enc = await diskEncryptSector(sector, s, masterKey, permTable);
+      outBuf.set(enc, 8 + s*DISK_SECTOR_SIZE);
+      if(onProgress) onProgress(Math.round((s+1)/nSectors*100));
+    }
+    return outBuf;
+  }
+
+  async function diskDecryptFile(encData, masterKey, permTable, onProgress){
+    const view = new DataView(encData.buffer, encData.byteOffset, encData.byteLength);
+    const originalLen = Number(view.getBigUint64(0, false));
+    const payload = encData.slice(8);
+    const nSectors = payload.length / DISK_SECTOR_SIZE;
+    const outBuf = new Uint8Array(nSectors * DISK_SECTOR_SIZE);
+    for(let s=0; s<nSectors; s++){
+      const sector = payload.slice(s*DISK_SECTOR_SIZE, (s+1)*DISK_SECTOR_SIZE);
+      const dec = await diskDecryptSector(sector, s, masterKey, permTable);
+      outBuf.set(dec, s*DISK_SECTOR_SIZE);
+      if(onProgress) onProgress(Math.round((s+1)/nSectors*100));
+    }
+    return outBuf.slice(0, originalLen);
+  }
+
+  async function diskPassphraseToKey(passphrase){
+    const salt = new TextEncoder().encode('LaLivreeDHermes2026');
+    const keyMat = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), {name:'PBKDF2'}, false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:100000, hash:'SHA-256'}, keyMat, 256);
+    return new Uint8Array(bits);
+  }
+
+  function bytesToHex(bytes){
+    return Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+
+  async function onDeriveKey(){
+    const statusEl = document.getElementById('disk-fingerprint');
+    const pass = document.getElementById('disk-passphrase').value;
+    if(!pass){ statusEl.textContent = 'Entrez une passphrase.'; return; }
+    diskMasterKey = await diskPassphraseToKey(pass);
+    statusEl.textContent = 'Empreinte de la clé : ' + bytesToHex(diskMasterKey.slice(0,8));
+  }
+
+  function diskSetProgress(barId, wrapId, pct){
+    const wrap = document.getElementById(wrapId);
+    wrap.classList.add('active');
+    document.getElementById(barId).style.width = pct + '%';
+  }
+
+  async function onDiskEncrypt(){
+    const infoEl = document.getElementById('disk-encrypt-info');
+    if(!diskPermTable){ infoEl.textContent = 'Table de permutation en cours d\'initialisation, réessaie dans un instant.'; return; }
+    if(!diskMasterKey){ infoEl.textContent = 'Dérive la clé avant de chiffrer.'; return; }
+    const input = document.getElementById('disk-file-encrypt');
+    if(!input.files[0]){ infoEl.textContent = 'Choisis un fichier.'; return; }
+    const file = input.files[0];
+    const buf = new Uint8Array(await file.arrayBuffer());
+    diskSetProgress('disk-encrypt-progress-bar','disk-encrypt-progress',0);
+    const out = await diskEncryptFile(buf, diskMasterKey, diskPermTable, pct=>diskSetProgress('disk-encrypt-progress-bar','disk-encrypt-progress',pct));
+    const blob = new Blob([out], {type:'application/octet-stream'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = file.name + '.lldh';
+    a.click();
+    infoEl.textContent = file.name + ' — ' + file.size.toLocaleString('fr-FR') + ' octets — chiffré ✓';
+  }
+
+  async function onDiskDecrypt(){
+    const infoEl = document.getElementById('disk-decrypt-info');
+    if(!diskPermTable){ infoEl.textContent = 'Table de permutation en cours d\'initialisation, réessaie dans un instant.'; return; }
+    if(!diskMasterKey){ infoEl.textContent = 'Dérive la clé avant de déchiffrer.'; return; }
+    const input = document.getElementById('disk-file-decrypt');
+    if(!input.files[0]){ infoEl.textContent = 'Choisis un fichier .lldh.'; return; }
+    const file = input.files[0];
+    const buf = new Uint8Array(await file.arrayBuffer());
+    diskSetProgress('disk-decrypt-progress-bar','disk-decrypt-progress',0);
+    let out;
+    try{
+      out = await diskDecryptFile(buf, diskMasterKey, diskPermTable, pct=>diskSetProgress('disk-decrypt-progress-bar','disk-decrypt-progress',pct));
+    }catch(e){
+      infoEl.textContent = 'Erreur de déchiffrement : ' + e.message;
+      return;
+    }
+    const blob = new Blob([out], {type:'application/octet-stream'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = file.name.replace(/\.lldh$/i, '') || 'fichier_dechiffre';
+    a.click();
+    infoEl.textContent = file.name + ' — ' + file.size.toLocaleString('fr-FR') + ' octets — déchiffré ✓';
   }
 
   function wireUI(){
@@ -655,6 +939,18 @@
     document.getElementById('btnDownloadKeys').addEventListener('click', downloadKeys);
     document.getElementById('dec-file-grid').addEventListener('change', function(){ loadGridFile(this); });
     document.getElementById('dec-file-keys').addEventListener('change', function(){ loadKeysFile(this); });
+
+    document.getElementById('btnDeriveKey').addEventListener('click', onDeriveKey);
+    document.getElementById('btnDiskEncrypt').addEventListener('click', onDiskEncrypt);
+    document.getElementById('btnDiskDecrypt').addEventListener('click', onDiskDecrypt);
+    document.getElementById('disk-file-encrypt').addEventListener('change', function(){
+      const f = this.files[0];
+      document.getElementById('disk-encrypt-info').textContent = f ? (f.name + ' — ' + f.size.toLocaleString('fr-FR') + ' octets') : '';
+    });
+    document.getElementById('disk-file-decrypt').addEventListener('change', function(){
+      const f = this.files[0];
+      document.getElementById('disk-decrypt-info').textContent = f ? (f.name + ' — ' + f.size.toLocaleString('fr-FR') + ' octets') : '';
+    });
   }
 
   document.addEventListener('DOMContentLoaded', function(){
