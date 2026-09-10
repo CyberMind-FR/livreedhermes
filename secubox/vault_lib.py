@@ -9,6 +9,13 @@ Historique des versions :
   v1.1 : XChaCha20-Poly1305 (nonce 24B) + clé MAC dédiée + anti-DoS + versioning
   v1.2 : Argon2id remplace PBKDF2 (memory-hard, résistant GPU/ASIC)
 
+Les vaults v1 restent lisibles : leur dérivation (HKDF direct sur la clé
+maître, libellés en -v1) est conservée et choisie par l'octet de version de
+l'en-tête. Un vault v1 ouvert puis enregistré est migré en v2.
+
+Le KDF n'est exécuté qu'une fois par vault, quel que soit le nombre
+d'entrées : le matériel dérivé est étendu par HKDF pour chaque fichier.
+
 Format du vault (.sbvault) :
   [4B magic "SBVT"][1B version][1B algo][2B reserved]
   [32B salt Argon2id][4B manifest_size][manifest chiffré]
@@ -59,26 +66,68 @@ def _argon2id(passphrase_or_key: bytes, salt: bytes) -> bytes:
         type=Argon2Type.ID,
     )
 
-def _derive_keys(master_key: bytes, salt: bytes) -> Dict[str, bytes]:
+# CORRECTIF AUDIT 2026-09-10 — compatibilité v1.
+# open() acceptait « version in (1, 2) » mais ne connaissait que la
+# dérivation v2. Un vault v1, dont les sous-clés viennent d'un HKDF appliqué
+# directement à master_key avec des libellés en -v1, échouait donc à la
+# vérification du MAC et s'entendait répondre « Vault corrompu ou clé
+# incorrecte » — un message qui accuse l'utilisateur d'une erreur de clé pour
+# ce qui n'est qu'un format antérieur. Les deux dérivations coexistent
+# désormais, choisies par l'octet de version lu dans l'en-tête.
+#
+# CORRECTIF AUDIT 2026-09-10 — un seul Argon2id par vault.
+# _entry_key() relançait un Argon2id complet (64 Mo, time=3) par entrée, à
+# l'ouverture comme à l'enregistrement : environ 70 ms et 64 Mo de churn par
+# fichier, linéairement. La borne « anti-DoS » MAX_ENTRIES autorisait ainsi
+# plus d'une heure de calcul pour un vault légitime. Le matériel est
+# maintenant dérivé une fois et étendu par HKDF pour chaque entrée — ce que
+# _derive_keys() faisait déjà juste à côté. La sortie est inchangée octet
+# pour octet : les vaults v2 existants restent lisibles.
+
+_V1_LABELS = {'manifest': b'SecuBox-Vault-Manifest-v1',
+              'mac':      b'SecuBox-Vault-MAC-v1',
+              'entry':    'SecuBox-Vault-Entry-v1:'}
+_V2_LABELS = {'manifest': b'SecuBox-Vault-Manifest-v2',
+              'mac':      b'SecuBox-Vault-MAC-v2',
+              'entry':    'SecuBox-Vault-Entry-v2:'}
+
+def _labels(version: int) -> Dict:
+    return _V1_LABELS if version == 1 else _V2_LABELS
+
+def _key_material(master_key: bytes, salt: bytes, version: int) -> bytes:
     """
-    Dérive toutes les sous-clés depuis Argon2id(master_key, salt).
-    Chaque sous-clé a un usage unique via HKDF.
+    Matériel dont dérivent toutes les sous-clés du vault.
+
+    v1 : master_key telle quelle — le HKDF était appliqué directement.
+    v2 : Argon2id(master_key, salt), memory-hard.
+
+    À dériver UNE fois par vault, puis à passer à _entry_key().
     """
-    km = _argon2id(master_key, salt)   # 64 bytes de matériel
+    return master_key if version == 1 else _argon2id(master_key, salt)
+
+def _derive_keys(master_key: bytes, salt: bytes,
+                 version: int = VERSION) -> Dict[str, bytes]:
+    """
+    Sous-clés du vault. La clé 'km' porte le matériel à réutiliser pour les
+    entrées, afin de ne pas relancer le KDF une fois par fichier.
+    """
+    km  = _key_material(master_key, salt, version)
+    lab = _labels(version)
 
     def sub(info: bytes) -> bytes:
         return HKDF(_h.SHA256(), 32, salt=salt, info=info).derive(km)
 
     return {
-        'manifest': sub(b'SecuBox-Vault-Manifest-v2'),
-        'mac':      sub(b'SecuBox-Vault-MAC-v2'),
+        'manifest': sub(lab['manifest']),
+        'mac':      sub(lab['mac']),
+        'km':       km,
     }
 
-def _entry_key(master_key: bytes, entry_name: str, salt: bytes) -> bytes:
-    """Clé par entrée : Argon2id → HKDF avec nom du fichier."""
-    km = _argon2id(master_key, salt)
+def _entry_key(km: bytes, entry_name: str, salt: bytes,
+               version: int = VERSION) -> bytes:
+    """Clé par entrée : HKDF du matériel déjà dérivé, avec le nom du fichier."""
     return HKDF(_h.SHA256(), 32, salt=salt,
-                info=f'SecuBox-Vault-Entry-v2:{entry_name}'.encode()).derive(km)
+                info=f'{_labels(version)["entry"]}{entry_name}'.encode()).derive(km)
 
 # ── XChaCha20-Poly1305 ────────────────────────────────────────────────────────
 def _xchacha_subkey(key: bytes, nonce_24: bytes):
@@ -134,13 +183,14 @@ class Vault:
         salt = raw[8:8+SALT_SIZE]
 
         # HMAC avant toute allocation [anti-DoS]
-        keys    = _derive_keys(master_key, salt)
+        keys    = _derive_keys(master_key, salt, version)
         mac_key = keys['mac']
         payload = raw[:-MAC_SIZE]
         if not _hmac.compare_digest(raw[-MAC_SIZE:],
                                      _hmac.new(mac_key, payload,
                                                hashlib.sha256).digest()):
-            raise ValueError("Vault corrompu ou clé incorrecte")
+            raise ValueError(f"Vault corrompu ou clé incorrecte "
+                             f"(format v{version})")
 
         rest          = payload[HEADER_SIZE:]
         manifest_size = struct.unpack('>I', rest[:4])[0]
@@ -167,7 +217,7 @@ class Vault:
             if cursor + 4 + entry_size > len(rest):
                 raise ValueError(f"Entrée '{name}' tronquée (données)")
             cursor += 4
-            ekey = _entry_key(master_key, name, salt)
+            ekey = _entry_key(keys['km'], name, salt, version)
             data = _dec(rest[cursor:cursor+entry_size], ekey, name.encode())
             if hashlib.sha256(data).hexdigest() != meta['sha256']:
                 raise ValueError(f"Hash invalide pour '{name}'")
@@ -200,7 +250,9 @@ class Vault:
                 for n, m in self._entries.items()]
 
     def save(self) -> None:
-        keys     = _derive_keys(self.master_key, self.salt)
+        # Toujours écrit en v2 : un vault v1 ouvert puis enregistré est
+        # migré vers Argon2id, sans changer ni sa passphrase ni son sel.
+        keys     = _derive_keys(self.master_key, self.salt, VERSION)
         mkey     = keys['manifest']
         mac_key  = keys['mac']
 
@@ -210,7 +262,7 @@ class Vault:
 
         entries_blob = bytearray()
         for name, meta in self._entries.items():
-            ekey      = _entry_key(self.master_key, name, self.salt)
+            ekey      = _entry_key(keys['km'], name, self.salt, VERSION)
             entry_enc = _enc(meta['data'], ekey, name.encode())
             entries_blob += struct.pack('>I', len(entry_enc)) + entry_enc
 
