@@ -561,7 +561,20 @@ def _carter360_grammar(master_key: bytes, ref360: List[Dict]) -> List[Dict]:
 
 def _carter360_positions(br: int, bc: int,
                           g: Dict, ref360: List[Dict]) -> List[Tuple]:
-    """8 positions de lecture du bloc 12×12 (br, bc) selon la grammaire g."""
+    """
+    Positions de lecture du bloc 12×12 (br, bc) selon la grammaire g.
+
+    Zéro à 16 positions, et non 8 comme on pourrait l'attendre. La grammaire
+    tire une couleur parmi C1/C2/C3, mais une forme n'offre pas forcément le
+    canal tiré : sur les 294 formes du référent, 84 portent C1, 198 portent
+    C3, 214 portent C2. Le canal absent, le .get() rend une liste vide et le
+    bloc ne porte rien. Les canaux existants comptent 8 points, sauf 21
+    d'entre eux qui en comptent 16.
+
+    Mesuré sur 463 blocs message : 44,9 % ne rendent aucune position, la
+    moyenne s'établissant à 4,60. Toute capacité calculée comme n_msg*8 est
+    donc inatteignable — voir _carter360_message_positions().
+    """
     form = ref360[g['form_id'] % len(ref360)]
     pts  = form['positions'].get(g['color'], [])
     r0, c0 = br * CARTER360_BLOCK, bc * CARTER360_BLOCK
@@ -585,11 +598,10 @@ def encode_carter_360(message: str, master_key: bytes,
       'message'   → forme Ref360 appliquée, valeurs = message XChaCha20
 
     Capacité utile : 152 caractères en moyenne sur 200 clés (49 à 246),
-    contre 214 pour Carter 90×90 Ref256. Les formes Ref360 ne rendent que
-    1 à 3 points par couleur, d'où une capacité inférieure à celle du
-    Ref256 malgré une grille plus grande. La grammaire étant dérivée de la
-    clé, la capacité varie fortement d'une clé à l'autre :
-    carter360_capacity() donne le chiffre exact pour une clé donnée.
+    contre 214 pour Carter 90×90 Ref256 — inférieure malgré une grille plus
+    grande, pour la raison expliquée sous _carter360_positions(). La
+    grammaire étant dérivée de la clé, la capacité varie fortement d'une clé
+    à l'autre : carter360_capacity() donne le chiffre exact pour une clé.
     """
     import secrets as _sec
     if ref360 is None:
@@ -604,10 +616,12 @@ def encode_carter_360(message: str, master_key: bytes,
     # trahissaient les cellules message dans un bruit couvrant [0..43].
     nibbles = payload_to_symbols(payload)
 
-    # Positions réellement disponibles : une forme Ref360 ne compte que
-    # 1 à 3 points pour la couleur tirée, jamais 8, et se tronque au bord
-    # de la grille. Le produit n_msg*8 annonçait donc une capacité
-    # inatteignable — environ 1,7 fois la capacité réelle.
+    # Positions réellement disponibles. La grammaire tire une couleur parmi
+    # C1/C2/C3, mais une forme Ref360 n'offre pas forcément le canal tiré :
+    # 84 formes sur 294 portent C1, 198 portent C3, 214 portent C2. Quand le
+    # canal manque, le bloc ne rend AUCUNE position. Mesuré sur 463 blocs
+    # message : 44,9 % n'en rendent aucune, et la moyenne tombe à 4,60 par
+    # bloc. Le produit n_msg*8 annonçait donc une capacité inatteignable.
     n_pos = _carter360_message_positions(grammar, ref360)
     if len(nibbles) > n_pos:
         raise ValueError(
@@ -651,10 +665,12 @@ def carter360_capacity(master_key: bytes,
     n_msg = sum(1 for g in grammar if g['role'] == _MESSAGE)
     n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
     n_pur = sum(1 for g in grammar if g['role'] == _PURE)
-    # Positions réellement disponibles : une forme Ref360 ne compte que
-    # 1 à 3 points pour la couleur tirée, jamais 8, et se tronque au bord
-    # de la grille. Le produit n_msg*8 annonçait donc une capacité
-    # inatteignable — environ 1,7 fois la capacité réelle.
+    # Positions réellement disponibles. La grammaire tire une couleur parmi
+    # C1/C2/C3, mais une forme Ref360 n'offre pas forcément le canal tiré :
+    # 84 formes sur 294 portent C1, 198 portent C3, 214 portent C2. Quand le
+    # canal manque, le bloc ne rend AUCUNE position. Mesuré sur 463 blocs
+    # message : 44,9 % n'en rendent aucune, et la moyenne tombe à 4,60 par
+    # bloc. Le produit n_msg*8 annonçait donc une capacité inatteignable.
     n_pos = _carter360_message_positions(grammar, ref360)
     return {
         'referent':         '360',
@@ -662,8 +678,10 @@ def carter360_capacity(master_key: bytes,
         'blocs_message':    n_msg,
         'blocs_structure':  n_str,
         'blocs_purs':       n_pur,
-        # Moyenne constatée, et non la constante 8 d'avant : les formes
-        # Ref360 rendent 1 à 3 points selon la couleur tirée.
+        # Moyenne constatée, et non la constante 8 d'avant : un canal de
+        # couleur existant porte bien 8 points (16 pour 21 d'entre eux),
+        # mais près d'un bloc message sur deux tire un canal absent de sa
+        # forme et ne rend rien du tout.
         'positions_bloc':   (n_pos / n_msg) if n_msg else 0,
         'nibbles':          n_pos,
         'bytes_utiles':     max_message_for(n_pos),
