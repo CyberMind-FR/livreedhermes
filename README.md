@@ -39,11 +39,6 @@ JavaScript en ligne. Ce qui est partagé entre plusieurs pages vit dans
 `motifs (4).html` et `pages.html` ne sont que des redirections conservées pour
 les anciens liens.
 
-`app.js` et `content.json`, à la racine, sont les vestiges d'une ancienne
-version du site pilotée par un moteur de contenu JSON. **Aucun fichier HTML ne
-les référence** — ils ne sont ni chargés ni lus, et modifier `content.json` n'a
-aucun effet sur le site.
-
 ## JavaScript partagé (`assets/`)
 
 | Fichier | Rôle |
