@@ -1204,8 +1204,20 @@
     const stegKey = km.slice(0,32);
     const geoSeed = km.slice(32,64);
 
-    const sidBuf = new Uint8Array(await crypto.subtle.digest('SHA-256', shared));
-    const sessionId = scBytesToHex(sidBuf.slice(0,8));
+    // CORRECTIF AUDIT 2026-09-10 : le session ID valait sha256(shared), un
+    // hachage du secret ECDH brut. Il est affiche et sert de prefixe aux noms
+    // de fichiers, donc il circule ; c'etait un engagement verifiable sur le
+    // secret partage — qui apprendrait « shared » plus tard pourrait confirmer
+    // qu'il correspond a une session observee. Non exploitable en soi, mais un
+    // identifiant public n'a aucune raison de deriver du secret lui-meme
+    // plutot que du materiel HKDF, sous un libelle qui lui est propre. Meme
+    // correction que du cote Python (secu_box.py).
+    const sidBits = await crypto.subtle.deriveBits(
+      {name:'HKDF', hash:'SHA-256',
+       salt: new TextEncoder().encode('SecuBox-Session-v1'),
+       info: new TextEncoder().encode('session-id')},
+      await crypto.subtle.importKey('raw', km, 'HKDF', false, ['deriveBits']), 64);
+    const sessionId = scBytesToHex(new Uint8Array(sidBits));
 
     // Chaine d'authentification comparee de vive voix (SAS). CORRECTIF AUDIT
     // 2026-09-10 : elle valait 48 bits, derives du session ID. Un relais actif

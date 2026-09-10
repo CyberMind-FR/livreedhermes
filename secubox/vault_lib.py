@@ -238,10 +238,26 @@ class Vault:
         return self._entries[name]['data']
 
     def remove(self, name: str) -> None:
+        """
+        Retire une entrée du vault.
+
+        N'EFFACE PAS le clair de la mémoire. La ligne d'écrasement d'avant
+        réassignait la référence à des octets aléatoires ; les `bytes` de
+        Python étant immuables, l'objet d'origine survivait intact jusqu'au
+        passage du ramasse-miettes, et toute autre référence — celle de
+        l'appelant, par exemple — continuait de le lire. L'écrasement était
+        donc sans effet, et le laisser en place entretenait la croyance
+        inverse. CPython ne permet pas de garantir cet effacement : les
+        `bytes` sont immuables, l'allocateur peut recopier, et rien
+        n'empêche la pagination sur disque.
+
+        Un secret qui ne doit pas survivre en mémoire relève du système
+        d'exploitation (pages verrouillées, chiffrement de la swap), pas de
+        cette bibliothèque. Après save(), le fichier ne contient plus
+        l'entrée : c'est la seule suppression que ce module assure.
+        """
         if name not in self._entries:
             raise KeyError(f"'{name}' absent du vault")
-        self._entries[name]['data'] = secrets.token_bytes(
-            self._entries[name]['size'])
         del self._entries[name]
 
     def list(self) -> List[Dict]:
@@ -279,6 +295,23 @@ class Vault:
         os.replace(tmp, self.path)
 
     def secure_delete(self) -> None:
+        """
+        Écrase le fichier d'octets aléatoires, puis le supprime.
+
+        Le nom promet plus que ce que la méthode peut tenir. L'écrasement
+        en place ne détruit les données que sur un support qui réécrit
+        vraiment les mêmes secteurs. Ce n'est le cas ni d'un SSD, dont le
+        nivellement d'usure écrit ailleurs et laisse l'ancien bloc lisible
+        jusqu'au ramasse-miettes du contrôleur, ni d'un système de fichiers
+        journalisé ou copy-on-write (APFS, Btrfs, ZFS, ext4 en data=journal),
+        ni d'un instantané ou d'une sauvegarde déjà pris. Des copies peuvent
+        également subsister dans la swap ou le cache de pages.
+
+        Sur un disque à plateaux sans instantané, l'écrasement fait son
+        office. Partout ailleurs, considérer que le fichier a seulement été
+        délié, et se reposer sur le chiffrement — c'est lui, et non
+        l'écrasement, qui protège un vault dont le support a été saisi.
+        """
         if os.path.exists(self.path):
             with open(self.path, 'wb') as f:
                 f.write(secrets.token_bytes(os.path.getsize(self.path)))
@@ -323,7 +356,9 @@ def demo():
         print(f"Mauvaise clé : {e} ✓")
 
     v2.secure_delete()
-    print(f"Suppression sécurisée ✓")
+    print(f"Fichier écrasé puis supprimé ✓")
+    print(f"  → sur SSD ou système de fichiers journalisé, l'écrasement ne")
+    print(f"    détruit pas les blocs : c'est le chiffrement qui protège")
     print(f"\nChangements v1.2 :")
     print(f"  PBKDF2-SHA256 (300k)  →  Argon2id (time=3, mem=64MB)")
     print(f"  Résistance GPU/ASIC   : ×{int(t_kdf/0.1):,} vs PBKDF2")
