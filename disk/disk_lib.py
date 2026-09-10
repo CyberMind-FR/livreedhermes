@@ -1,47 +1,76 @@
 # © Anibal Edelberto Amiot 2026 — La Livrée d'Hermès
 # AGPL v3 (non-commercial) / Commercial license: anibaledel@gmail.com
-# Algorithm: IACR ePrint 2026 (CC BY) — Patent: FR2865054
+# Geometric constructions: IACR ePrint 2026 (CC BY) — Patent: FR2865054
 """
-Chiffrement de disque SPN géométrique — Double Référent 256 + 360
+Chiffrement de disque — Architecture hybride géométrique + ChaCha20-Poly1305
 La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
 
-Architecture SPN 5 couches par tour :
-  1. S-box GF(2^8) géométrique : S(x) = M·GF_INV(x) ⊕ c
-     max_DDT ≤ 4 prouvé [Nyberg 1994] — niveau AES exact
-     M = transformation affine dérivée de la configuration géométrique
-  2. Permutation géo Ref256     : 12 288 configurations (256×24×2)
-  3. MixBlock géométrique       : diffusion triangulaire intra/inter-groupes
-  4. Permutation géo Ref360     : 342+ configurations (57×6, 360×6 prévu)
-  5. XOR keystream              : 192 bits
+ARCHITECTURE (suite à évaluation cryptologique externe) :
 
-Résultats mesurés (4 tours) :
-  max_DDT       : 4 (prouvé — même niveau qu'AES Rijndael)
-  Avalanche     : ~50% (AES ~50%)
-  Bits/secteur  : 2^159 432 (AES-256 : 2^256)
+  Couche 1 — Géométrique (La Livrée d'Hermès) :
+    Transforme le master_key en clé de session via le SPN géométrique.
+    Referent 256 (S-box GF + permutation) + Referent 360 (permutation).
+    Mesuré : la table Ref256 compte 12 288 entrées mais seulement 288
+    permutations distinctes (les positions de chaque forme sont déjà triées
+    dans le référent, donc _perm_from_seq efface l'identité de la forme :
+    seul l'ordre des quadrants compte). Soit ~8 bits, non 13,6.
+    Ref360 : 342 entrées pour 116 permutations distinctes.
+    Rôle : diversification de clé par construction géométrique originale.
+    NON revendiqué comme chiffrement complet à lui seul.
 
-Différence clé vs AES :
-  AES  : S-box FIXE, résistance algébrique prouvée
-  Ici  : S-box VARIABLE par tour (dérivée de la forme géométrique),
-         max_DDT ≤ 4 prouvé, résistance algébrique à formaliser
+  Couche 2 — Cryptographique standard :
+    ChaCha20-Poly1305 (IETF RFC 8439, nonce 96 bits — c'est ce que fournit
+    `cryptography`; ce n'est PAS XChaCha20, contrairement à ce qu'indiquaient
+    les versions précédentes de ce fichier).
+    Fournit : confidentialité + authentification + intégrité par secteur.
+    Le nonce de 96 bits de chaque secteur est dérivé par HKDF d'un nonce
+    global de 192 bits tiré au hasard par fichier, et la clé change à chaque
+    secteur : la réutilisation de nonce reste hors de portée.
+
+Format de sortie :
+  [32B salt KDF][24B nonce global][secteurs chiffrés+auth][32B MAC global]
+
+Propriétés démontrées :
+  - Confidentialité : ChaCha20-Poly1305 (standard, éprouvé)
+  - Authentification : Poly1305 par secteur (16B tag) + HMAC-SHA256 global
+  - Diversification géométrique : clé de session dérivée via SPN Ref256+360
+  - max_DDT S-box ≤ 4 [Nyberg 1994] — propriété de la couche géométrique
+
+AVERTISSEMENT :
+  La sécurité cryptographique effective repose sur ChaCha20-Poly1305,
+  algorithme standard éprouvé. Le SPN géométrique est une couche de
+  diversification de clé originale, non un chiffrement autonome certifié.
+  La résistance globale du SPN comme PRP n'a pas été évaluée formellement.
 """
 
-import json, os, hashlib, struct, itertools, math
+import json, os, hmac as _hmac, hashlib, struct, itertools, math
 from typing import List, Dict, Tuple, Optional
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes as _hashes
 
-_DIR        = os.path.dirname(os.path.abspath(__file__))
-REF256_PATH = os.path.join(_DIR, 'referent_256.json')
-REF360_PATH = os.path.join(_DIR, 'referent_360.json')
+_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _find_ref(name: str) -> str:
+    for path in [
+        os.path.join(_DIR, name),
+        os.path.join(_DIR, 'data', name),
+        os.path.join(os.path.dirname(_DIR), 'data', name),
+    ]:
+        if os.path.exists(path): return path
+    raise FileNotFoundError(f"{name} introuvable")
 
 SECTOR_SIZE  = 512
-CHUNK_SIZE   = 24
-CHUNKS_FULL  = SECTOR_SIZE // CHUNK_SIZE   # 21
-TAIL_SIZE    = SECTOR_SIZE %  CHUNK_SIZE   # 8
+NONCE_SIZE   = 24   # nonce global 192 bits (le nonce AEAD par secteur en fait 96)
+TAG_SIZE     = 16   # Poly1305
+SALT_SIZE    = 32
+MAC_SIZE     = 32   # HMAC-SHA256 global
 N_ROUNDS     = 4
 ALL_ORDERS   = list(itertools.permutations(range(4)))
 COLOR_ORDERS = list(itertools.permutations(['C1','C2','C3']))
 OFFSETS_12   = [(0,0),(0,6),(6,0),(6,6)]
 
-# ── GF(2^8) — polynôme irréductible d'AES : x^8+x^4+x^3+x+1 ─────────────────
+# ── GF(2^8) ───────────────────────────────────────────────────────────────────
 def _gf_mul(a: int, b: int) -> int:
     r = 0
     for _ in range(8):
@@ -57,14 +86,12 @@ for _x in range(1, 256):
         if _gf_mul(_x, _y) == 1: _GF_INV[_x] = _y; break
 
 def _gf2_matvec(M: List[int], x: int) -> int:
-    """Produit matrice 8×8 GF(2) × vecteur byte."""
     r = 0
     for i, row in enumerate(M):
         r |= (bin(row & x).count('1') % 2) << i
     return r
 
 def _gf2_inv(M: List[int]) -> Optional[List[int]]:
-    """Inverse d'une matrice 8×8 sur GF(2) — Gauss-Jordan."""
     n = 8
     rows = [(M[i] & 0xff) | ((1 << n) << i) for i in range(n)]
     for col in range(n):
@@ -75,17 +102,9 @@ def _gf2_inv(M: List[int]) -> Optional[List[int]]:
             if r != col and (rows[r] >> col) & 1: rows[r] ^= rows[col]
     return [(rows[i] >> n) & 0xff for i in range(n)]
 
-# ── S-box GF(2^8) géométrique ─────────────────────────────────────────────────
 def _make_sbox_gf(seed: bytes) -> Tuple[List[int], List[int]]:
-    """
-    S(x) = M · GF_INV(x) ⊕ c   avec M triangulaire supérieure (toujours inversible)
-    S_inv(y) = GF_INV( Mi · (y ⊕ c) )
-    
-    Propriété prouvée : max_DDT ≤ 4 [Nyberg 1994]
-    La matrice M est dérivée du seed géométrique (config_id intégré).
-    """
+    """S(x) = M·GF_INV(x) ⊕ c, max_DDT ≤ 4 [Nyberg 1994]."""
     rng = hashlib.sha256(seed).digest() + hashlib.sha256(seed + b'x').digest()
-    # Matrice triangulaire supérieure, diagonale = 1 → toujours inversible
     M = [0]*8
     for i in range(8):
         M[i] = 1 << i
@@ -93,21 +112,24 @@ def _make_sbox_gf(seed: bytes) -> Tuple[List[int], List[int]]:
             if (rng[i] >> (j-i-1)) & 1: M[i] |= (1 << j)
     const = rng[8]
     Mi = _gf2_inv(M)
-    assert Mi is not None
+    if Mi is None:
+        raise ValueError("Matrice affine singulière")
     sbox     = [_gf2_matvec(M,  _GF_INV[x]) ^ const for x in range(256)]
     sbox_inv = [_GF_INV[_gf2_matvec(Mi, y ^ const)] for y in range(256)]
     return sbox, sbox_inv
 
 # ── Chargement ────────────────────────────────────────────────────────────────
 def load_referents() -> Tuple[List, List]:
-    with open(REF256_PATH) as f: r256 = json.load(f)
-    with open(REF360_PATH) as f: r360 = json.load(f)
-    r360 = [f for f in r360 if sum(len(p) for p in f['positions'].values()) == 24]
+    with open(_find_ref('referent_256.json')) as f: r256 = json.load(f)
+    with open(_find_ref('referent_360.json')) as f: r360 = json.load(f)
+    r360 = [f for f in r360
+            if sum(len(p) for p in f['positions'].values()) == 24]
     return r256, r360
 
 # ── Tables de permutation ─────────────────────────────────────────────────────
 def _perm_from_seq(seq: List[int]) -> Tuple[List, List]:
-    assert len(seq) == 24
+    if len(seq) != 24:
+        raise ValueError(f"Séquence {len(seq)} positions, attendu 24")
     P = sorted(range(24), key=lambda i: seq[i])
     Pi = [0]*24
     for i, p in enumerate(P): Pi[p] = i
@@ -121,7 +143,8 @@ def build_perm_table_256(ref256: List[Dict]) -> Dict:
                 seq = []
                 for slot in order:
                     dr, dc = OFFSETS_12[slot]
-                    for r, c in form[ck]: seq.append(r*12+c)
+                    for r, c in form[ck]:
+                        seq.append((r + dr) * 12 + (c + dc))
                 t[(form['id'], oi, col)] = _perm_from_seq(seq)
     return t
 
@@ -131,218 +154,309 @@ def build_perm_table_360(ref360: List[Dict]) -> Dict:
         for oi, co in enumerate(COLOR_ORDERS):
             seq = []
             for col in co:
-                for r, c in form['positions'].get(col, []): seq.append(r*12+c)
+                for r, c in form['positions'].get(col, []):
+                    seq.append(r * 12 + c)
             if len(seq) == 24:
                 t[(i, oi)] = _perm_from_seq(seq)
     return t
 
-# ── MixBlock géométrique ──────────────────────────────────────────────────────
+# ── MixBlock MDS — ShiftRows + MixColumns AES ────────────────────────────────
+# Matrice MDS 4×4 sur GF(2^8) [AES MixColumns, Daemen & Rijmen 2002]
+# Branch number mesuré >= 4 sur notre structure 4x6
+_MDS     = [[2,3,1,1],[1,2,3,1],[1,1,2,3],[3,1,1,2]]
+_MDS_INV = [[14,11,13,9],[9,14,11,13],[13,9,14,11],[11,13,9,14]]
+
+def _shift_rows(data: bytes) -> bytes:
+    """Decalage cyclique des lignes de la matrice 4x6 (modele AES ShiftRows)."""
+    r = bytearray(24)
+    for row in range(4):
+        for col in range(6):
+            r[row*6 + col] = data[row*6 + (col + row) % 6]
+    return bytes(r)
+
+def _unshift_rows(data: bytes) -> bytes:
+    r = bytearray(24)
+    for row in range(4):
+        for col in range(6):
+            r[row*6 + (col + row) % 6] = data[row*6 + col]
+    return bytes(r)
+
+def _mix_cols(data: bytes) -> bytes:
+    """Multiplication MDS sur chacune des 6 colonnes de la matrice 4x6."""
+    r = bytearray(24)
+    for col in range(6):
+        v = [data[row*6 + col] for row in range(4)]
+        for row in range(4):
+            x = 0
+            for k in range(4): x ^= _gf_mul(_MDS[row][k], v[k])
+            r[row*6 + col] = x
+    return bytes(r)
+
+def _unmix_cols(data: bytes) -> bytes:
+    r = bytearray(24)
+    for col in range(6):
+        v = [data[row*6 + col] for row in range(4)]
+        for row in range(4):
+            x = 0
+            for k in range(4): x ^= _gf_mul(_MDS_INV[row][k], v[k])
+            r[row*6 + col] = x
+    return bytes(r)
+
 def _mix(data: bytes) -> bytes:
-    d = bytearray(data)
-    for g in range(4):
-        base = g*6; acc = 0
-        for i in range(base+5, base-1, -1): acc ^= d[i]; d[i] = acc
-    for g in range(3):
-        for i in range(6): d[g*6+i] ^= d[(g+1)*6+i]
-    return bytes(d)
+    """ShiftRows + MixColumns MDS. Fondement: MDS prouvee sur GF(2^8)."""
+    return _mix_cols(_shift_rows(data))
 
 def _unmix(data: bytes) -> bytes:
-    d = bytearray(data)
-    for g in range(2, -1, -1):
-        for i in range(6): d[g*6+i] ^= d[(g+1)*6+i]
-    for g in range(4):
-        base = g*6
-        for i in range(base, base+5): d[i] ^= d[i+1]
-    return bytes(d)
+    """Inverse exact : MixColumns_inv + ShiftRows_inv."""
+    return _unshift_rows(_unmix_cols(data))
 
-# ── Dérivation des paramètres par tour ────────────────────────────────────────
-def _derive_round(master_key: bytes, sn: int, cn: int,
-                  rnd: int, n360: int) -> Tuple:
-    salt = struct.pack('>QIII', sn, cn, rnd, 0xDEADBEEF)
-    dk   = hashlib.pbkdf2_hmac('sha256', master_key, salt, 1000, dklen=32)
-    cfg256  = dk[0] % 256
-    oi256   = struct.unpack('>H', dk[1:3])[0] % 24
-    col256  = dk[3] & 1
-    xk      = dk[4:28]
-    idx360  = dk[28] % n360
-    oi360   = dk[29] % 6
-    seed    = hashlib.sha256(
-        master_key + struct.pack('>QIII', sn, cn, rnd, cfg256)
-    ).digest()
-    sbox, sbox_inv = _make_sbox_gf(seed)
-    return cfg256, oi256, col256, xk, sbox, sbox_inv, idx360, oi360
+# ── Couche géométrique : diversification de clé ───────────────────────────────
+def _geo_derive(master_key: bytes, nonce: bytes, sn: int,
+                pt256: Dict, pt360: Dict, pt360_keys: List,
+                n360: int, n_rounds: int) -> bytes:
+    """
+    Applique le SPN géométrique pour dériver une clé de session 32B.
+    Rôle : diversification de clé, pas chiffrement direct.
+    L'entrée est master_key (32B), la sortie est session_key (32B).
+    """
+    # Bloc d'entrée : XOR de master_key avec nonce+secteur
+    block = bytearray(32)
+    seed_material = nonce + struct.pack('>Q', sn)
+    h = hashlib.sha256(seed_material).digest()
+    for i in range(32):
+        block[i] = master_key[i] ^ h[i % 16 + (i // 16) * 16]
 
-# ── Chiffrement / déchiffrement d'un chunk ────────────────────────────────────
-def _enc_chunk(chunk: bytes, master_key: bytes, sn: int, cn: int,
-               pt256: Dict, pt360: Dict, n360: int,
-               pt360_keys: List, n_rounds: int) -> bytes:
-    data = bytes(chunk)
-    for rnd in range(n_rounds):
-        cfg, oi, col, xk, sbox, _, idx360, oi360 = _derive_round(
-            master_key, sn, cn, rnd, n360)
-        P256, _ = pt256[(cfg, oi, col)]
-        # Fallback si la clé 360 n'existe pas
-        key360 = (idx360, oi360)
-        if key360 not in pt360: key360 = pt360_keys[idx360 % len(pt360_keys)]
-        P360, _ = pt360[key360]
-        sub  = bytes(sbox[b] for b in data)
-        p256 = bytes(sub[P256[i]] for i in range(24))
-        mx   = _mix(p256)
-        p360 = bytes(mx[P360[i]] for i in range(24))
-        data = bytes(b^k for b,k in zip(p360, xk))
-    return data
+    # Appliquer le SPN sur deux chunks de 24B issus du bloc
+    result = bytearray(32)
+    for chunk_i in range(2):
+        chunk = bytes(block[chunk_i*12:chunk_i*12+24])  # overlap voulu
+        if len(chunk) < 24: chunk = chunk + bytes(24 - len(chunk))
+        data = bytes(chunk[:24])
+        for rnd in range(n_rounds):
+            salt = struct.pack('>QII', sn, chunk_i, rnd) + nonce[:8]
+            dk = hashlib.sha256(master_key + salt).digest()
+            cfg = dk[0] % 256; oi = struct.unpack('>H',dk[1:3])[0] % 24
+            col = dk[3] & 1
+            idx360 = dk[4] % n360; oi360 = dk[5] % 6
+            seed = hashlib.sha256(master_key + salt + bytes([cfg])).digest()
+            sbox, _ = _make_sbox_gf(seed)
+            P256, _ = pt256[(cfg, oi, col)]
+            key360  = (idx360, oi360)
+            if key360 not in pt360:
+                key360 = pt360_keys[idx360 % len(pt360_keys)]
+            P360, _ = pt360[key360]
+            sub  = bytes(sbox[b] for b in data)
+            p256 = bytes(sub[P256[i]] for i in range(24))
+            mx   = _mix(p256)
+            data = bytes(mx[P360[i]] for i in range(24))
+        result[chunk_i*16:chunk_i*16+16] = data[:16]
 
-def _dec_chunk(chunk: bytes, master_key: bytes, sn: int, cn: int,
-               pt256: Dict, pt360: Dict, n360: int,
-               pt360_keys: List, n_rounds: int) -> bytes:
-    data = bytes(chunk)
-    for rnd in reversed(range(n_rounds)):
-        cfg, oi, col, xk, _, sbox_inv, idx360, oi360 = _derive_round(
-            master_key, sn, cn, rnd, n360)
-        _, Pi256 = pt256[(cfg, oi, col)]
-        key360 = (idx360, oi360)
-        if key360 not in pt360: key360 = pt360_keys[idx360 % len(pt360_keys)]
-        _, Pi360 = pt360[key360]
-        unxor   = bytes(b^k for b,k in zip(data, xk))
-        undep360= bytes(unxor[Pi360[j]] for j in range(24))
-        unmixed = _unmix(undep360)
-        undep256= bytes(unmixed[Pi256[j]] for j in range(24))
-        data    = bytes(sbox_inv[b] for b in undep256)
-    return data
+    return bytes(result)
+
+# ── Clé du MAC global ─────────────────────────────────────────────────────────
+def _mac_key(geo_key: bytes, salt: bytes) -> bytes:
+    """
+    Clé HMAC dédiée, dérivée de la clé passée au KDF — jamais master_key brute.
+    Domaine séparé des clés de session (info distinct).
+    """
+    return HKDF(
+        algorithm=_hashes.SHA256(), length=32, salt=salt,
+        info=b'GeoSPN-global-mac-v2',
+    ).derive(geo_key)
 
 # ── API publique ──────────────────────────────────────────────────────────────
 class GeoSPN:
     """
-    Interface principale du SPN géométrique double référent.
-    Précharge les tables à l'initialisation pour des opérations répétées rapides.
+    Chiffrement hybride : diversification géométrique + ChaCha20-Poly1305.
+    Authentification par secteur (Poly1305) + globale (HMAC-SHA256).
     """
     def __init__(self, ref256: List[Dict], ref360: List[Dict],
                  n_rounds: int = N_ROUNDS):
+        if n_rounds < 1:
+            raise ValueError("n_rounds doit être ≥ 1")
         self.n_rounds    = n_rounds
         self.n360        = len(ref360)
         self.pt256       = build_perm_table_256(ref256)
         self.pt360       = build_perm_table_360(ref360)
         self.pt360_keys  = sorted(self.pt360.keys())
+        if not self.pt360_keys:
+            raise ValueError("Aucune forme Ref360 complète trouvée")
 
-    def encrypt_sector(self, data: bytes, sector_num: int,
-                       master_key: bytes) -> bytes:
-        assert len(data) == SECTOR_SIZE
-        out = bytearray()
-        for ci in range(CHUNKS_FULL):
-            out.extend(_enc_chunk(
-                data[ci*CHUNK_SIZE:(ci+1)*CHUNK_SIZE],
-                master_key, sector_num, ci,
-                self.pt256, self.pt360, self.n360,
-                self.pt360_keys, self.n_rounds))
-        tail = data[CHUNKS_FULL*CHUNK_SIZE:]
-        tk = hashlib.pbkdf2_hmac('sha256', master_key,
-                                  struct.pack('>QI', sector_num, 99),
-                                  1000, TAIL_SIZE)
-        out.extend(b^k for b,k in zip(tail, tk))
-        return bytes(out)
+    def _sector_nonce(self, global_nonce: bytes, sector_num: int) -> bytes:
+        """Nonce unique par secteur : HKDF(global_nonce + secteur)."""
+        hkdf = HKDF(
+            algorithm=_hashes.SHA256(),
+            length=NONCE_SIZE,
+            salt=struct.pack('>Q', sector_num),
+            info=b'GeoSPN-sector-nonce',
+        )
+        return hkdf.derive(global_nonce)
 
-    def decrypt_sector(self, data: bytes, sector_num: int,
-                       master_key: bytes) -> bytes:
-        assert len(data) == SECTOR_SIZE
-        out = bytearray()
-        for ci in range(CHUNKS_FULL):
-            out.extend(_dec_chunk(
-                data[ci*CHUNK_SIZE:(ci+1)*CHUNK_SIZE],
-                master_key, sector_num, ci,
-                self.pt256, self.pt360, self.n360,
-                self.pt360_keys, self.n_rounds))
-        tail = data[CHUNKS_FULL*CHUNK_SIZE:]
-        tk = hashlib.pbkdf2_hmac('sha256', master_key,
-                                  struct.pack('>QI', sector_num, 99),
-                                  1000, TAIL_SIZE)
-        out.extend(b^k for b,k in zip(tail, tk))
-        return bytes(out)
+    def encrypt(self, data: bytes, master_key: bytes) -> bytes:
+        """
+        Chiffre des données arbitraires.
+        Format : [32B salt][24B nonce][secteurs auth-chiffrés][32B HMAC global]
+        Chaque secteur = ChaCha20-Poly1305 avec clé dérivée géométriquement.
+        """
+        salt         = os.urandom(SALT_SIZE)
+        global_nonce = os.urandom(NONCE_SIZE)
 
-    def encrypt_data(self, data: bytes, master_key: bytes) -> bytes:
-        olen = len(data)
-        pad = (SECTOR_SIZE - olen % SECTOR_SIZE) % SECTOR_SIZE
-        padded = data + bytes(pad)
-        out = struct.pack('>Q', olen)
+        # KDF moderne : 300 000 itérations
+        geo_key = hashlib.pbkdf2_hmac(
+            'sha256', master_key, salt, iterations=300_000, dklen=32)
+
+        olen   = len(data)
+        header = struct.pack('>Q', olen)
+        padded = header + data
+        pad    = (SECTOR_SIZE - len(padded) % SECTOR_SIZE) % SECTOR_SIZE
+        padded = padded + bytes(pad)
+
+        ciphertext = bytearray()
         for s in range(len(padded) // SECTOR_SIZE):
-            out += self.encrypt_sector(
-                padded[s*SECTOR_SIZE:(s+1)*SECTOR_SIZE], s, master_key)
-        return out
+            sector = padded[s*SECTOR_SIZE:(s+1)*SECTOR_SIZE]
+            # Clé de session géométrique par secteur
+            session_key = _geo_derive(
+                geo_key, global_nonce, s,
+                self.pt256, self.pt360, self.pt360_keys,
+                self.n360, self.n_rounds)
+            # Nonce secteur unique
+            sector_nonce = self._sector_nonce(global_nonce, s)[:12]  # ChaCha20 = 96 bits
+            # ChaCha20-Poly1305 (RFC 8439)
+            aad = struct.pack('>Q', s) + global_nonce
+            enc = ChaCha20Poly1305(session_key).encrypt(
+                sector_nonce, sector, aad)
+            ciphertext.extend(enc)
 
-    def decrypt_data(self, data: bytes, master_key: bytes) -> bytes:
-        olen = struct.unpack('>Q', data[:8])[0]
-        payload = data[8:]
-        out = bytearray()
-        for s in range(len(payload) // SECTOR_SIZE):
-            out.extend(self.decrypt_sector(
-                payload[s*SECTOR_SIZE:(s+1)*SECTOR_SIZE], s, master_key))
-        return bytes(out)[:olen]
+        payload = salt + global_nonce + bytes(ciphertext)
+        mac = _hmac.new(_mac_key(geo_key, salt), payload,
+                        hashlib.sha256).digest()
+        return payload + mac
 
-    def security_stats(self) -> Dict:
-        b_sbox  = math.log2(math.factorial(256))     # 256! S-boxes possibles
-        b_r256  = math.log2(256 * 24 * 2)            # Perm Ref256
-        b_r360  = math.log2(self.n360 * 6)           # Perm Ref360
-        b_xor   = CHUNK_SIZE * 8
-        b_chunk = (b_sbox + b_r256 + b_r360 + b_xor) * self.n_rounds
-        b_sec   = b_chunk * CHUNKS_FULL
-        return {
-            'n_rounds'        : self.n_rounds,
-            'n360_forms'      : self.n360,
-            'max_ddt'         : 4,
-            'max_ddt_proof'   : 'Nyberg 1994 — GF_INV + affine transformation',
-            'bits_per_sector' : round(b_sec),
-            'aes256_bits'     : 256,
-            'advantage'       : round(b_sec - 256),
-            'avalanche_pct'   : '~50',
-        }
+    def decrypt(self, data: bytes, master_key: bytes) -> bytes:
+        """Déchiffre. Lève ValueError si MAC ou tag secteur invalide."""
+        if len(data) < SALT_SIZE + NONCE_SIZE + MAC_SIZE:
+            raise ValueError("Données trop courtes")
+        mac_recv = data[-MAC_SIZE:]
+        payload  = data[:-MAC_SIZE]
+
+        salt         = payload[:SALT_SIZE]
+        global_nonce = payload[SALT_SIZE:SALT_SIZE+NONCE_SIZE]
+        ciphertext   = payload[SALT_SIZE+NONCE_SIZE:]
+
+        # Le KDF est appliqué AVANT toute vérification : le MAC global est
+        # keyé par une clé dérivée, jamais par master_key brute. Sans cela,
+        # un attaquant hors ligne testerait les passphrases contre le MAC
+        # au coût d'un HMAC (~5 us) au lieu du PBKDF2 300 000 (~200 ms).
+        geo_key = hashlib.pbkdf2_hmac(
+            'sha256', master_key, salt, iterations=300_000, dklen=32)
+
+        mac_calc = _hmac.new(_mac_key(geo_key, salt), payload,
+                             hashlib.sha256).digest()
+        if not _hmac.compare_digest(mac_recv, mac_calc):
+            raise ValueError("MAC global invalide — données altérées ou clé incorrecte")
+
+        # Taille d'un secteur chiffré = SECTOR_SIZE + TAG_SIZE (Poly1305)
+        sector_enc_size = SECTOR_SIZE + TAG_SIZE
+        if len(ciphertext) % sector_enc_size != 0:
+            raise ValueError("Longueur ciphertext invalide")
+
+        plaintext = bytearray()
+        for s in range(len(ciphertext) // sector_enc_size):
+            enc_sector = ciphertext[s*sector_enc_size:(s+1)*sector_enc_size]
+            session_key  = _geo_derive(
+                geo_key, global_nonce, s,
+                self.pt256, self.pt360, self.pt360_keys,
+                self.n360, self.n_rounds)
+            sector_nonce = self._sector_nonce(global_nonce, s)[:12]
+            aad = struct.pack('>Q', s) + global_nonce
+            try:
+                dec = ChaCha20Poly1305(session_key).decrypt(
+                    sector_nonce, enc_sector, aad)
+            except Exception:
+                raise ValueError(f"Tag Poly1305 invalide au secteur {s}")
+            plaintext.extend(dec)
+
+        olen = struct.unpack('>Q', plaintext[:8])[0]
+        return bytes(plaintext[8:8+olen])
+
+    def description(self) -> str:
+        return (
+            "Chiffrement hybride : diversification géométrique GeoSPN "
+            f"(Ref256+Ref360, {self.n_rounds} tours, max_DDT≤4) "
+            "suivie de ChaCha20-Poly1305 (RFC 8439) par secteur. "
+            "Authentification : Poly1305 par secteur + HMAC-SHA256 global. "
+            "KDF : PBKDF2-SHA256, 300 000 itérations. "
+            "NON revendiqué comme chiffrement autonome certifié ; "
+            "la couche géométrique est une diversification de clé originale."
+        )
 
 # ── Clé maître ────────────────────────────────────────────────────────────────
 def passphrase_to_key(passphrase: str,
-                      salt: bytes = b'LaLivreeDHermes2026') -> bytes:
-    return hashlib.pbkdf2_hmac('sha256', passphrase.encode(),
-                               salt, iterations=100_000, dklen=32)
+                      salt: Optional[bytes] = None) -> Tuple[bytes, bytes]:
+    """
+    Dérive une clé maître 32B depuis une passphrase.
+    Retourne (key, salt). Salt aléatoire (32B) si non fourni.
+    KDF : PBKDF2-SHA256, 300 000 itérations.
+    """
+    if salt is None:
+        salt = os.urandom(SALT_SIZE)
+    elif len(salt) < 16:
+        raise ValueError("Salt trop court (minimum 16 bytes)")
+    key = hashlib.pbkdf2_hmac(
+        'sha256', passphrase.encode('utf-8'),
+        salt, iterations=300_000, dklen=32)
+    return key, salt
 
 # ── Démo ──────────────────────────────────────────────────────────────────────
 def demo():
-    import random
-    print("=== SPN GÉOMÉTRIQUE DOUBLE RÉFÉRENT — La Livrée d'Hermès ===\n")
+    print("=== GeoSPN + ChaCha20-Poly1305 — La Livrée d'Hermès ===\n")
+    print("Architecture : diversification géométrique + chiffrement standard\n")
+
     ref256, ref360 = load_referents()
-    print(f"Ref256 : {len(ref256)} formes | Ref360 : {len(ref360)} formes complètes")
-    print("Initialisation GeoSPN...")
     spn = GeoSPN(ref256, ref360)
-    print(f"  Pt256 : {len(spn.pt256)} perm | Pt360 : {len(spn.pt360)} perm\n")
-    mk = passphrase_to_key("LaLivreeDHermes2026")
-    print("Tests round-trip (10 secteurs)...")
-    for s in range(10):
-        sec = os.urandom(512)
-        assert spn.decrypt_sector(spn.encrypt_sector(sec, s, mk), s, mk) == sec
-    print("  10 secteurs : ✓")
-    msg = b"ANIBAL EDELBERTO AMIOT - LA LIVREE D'HERMES - BREVET FR2865054" * 15
-    enc = spn.encrypt_data(msg, mk)
-    dec = spn.decrypt_data(enc, mk)
-    assert msg == dec
-    print(f"  Fichier : '{dec[:55].decode()}' ✓")
-    # Avalanche
-    total = 0
-    for _ in range(500):
-        pt = os.urandom(24)
-        pos, bit = random.randint(0,23), random.randint(0,7)
-        mod = bytearray(pt); mod[pos] ^= (1<<bit)
-        c1 = _enc_chunk(pt, mk, 0, 0, spn.pt256, spn.pt360,
-                         spn.n360, spn.pt360_keys, spn.n_rounds)
-        c2 = _enc_chunk(bytes(mod), mk, 0, 0, spn.pt256, spn.pt360,
-                         spn.n360, spn.pt360_keys, spn.n_rounds)
-        total += sum(bin(a^b).count('1') for a,b in zip(c1,c2))
-    pct = total/500/192*100
-    s = spn.security_stats()
-    print(f"\n=== SÉCURITÉ ===")
-    print(f"  Architecture  : S-box GF → Perm256 → MixBlock → Perm360 → XOR")
-    print(f"  Tours/chunk   : {s['n_rounds']}")
-    print(f"  max_DDT       : {s['max_ddt']} (preuve : {s['max_ddt_proof']})")
-    print(f"  Avalanche     : {pct:.1f}% (AES ~50%)")
-    print(f"  Bits/secteur  : 2^{s['bits_per_sector']}")
-    print(f"  AES-256       : 2^{s['aes256_bits']}")
-    print(f"  Avantage      : +2^{s['advantage']} bits/secteur")
-    print(f"\n  Avec Ref360 complet (360 formes) : +{round(math.log2(360*6)-math.log2(s['n360_forms']*6),1)} bits/tour supplémentaires")
+    print(spn.description()); print()
+
+    mk, salt = passphrase_to_key("LaLivreeDHermes2026")
+    print(f"Clé maître : {mk.hex()[:32]}... (PBKDF2 300k itérations)\n")
+
+    msg = b"ANIBAL EDELBERTO AMIOT - LA LIVREE D'HERMES - BREVET FR2865054" * 10
+    print(f"Message : {len(msg)} bytes")
+
+    enc = spn.encrypt(msg, mk)
+    dec = spn.decrypt(enc, mk)
+    if msg != dec:
+        raise ValueError("ERREUR déchiffrement")
+    print(f"Chiffré  : {len(enc)} bytes")
+    print(f"Déchiffré : '{dec[:50].decode()}...' ✓")
+
+    # Test intégrité
+    tampered = bytearray(enc); tampered[SALT_SIZE + NONCE_SIZE + 20] ^= 1
+    try:
+        spn.decrypt(bytes(tampered), mk)
+        raise AssertionError("Intégrité non vérifiée !")
+    except ValueError as e:
+        print(f"Intégrité : altération détectée ✓ ({e})")
+
+    # Mauvaise clé
+    mk2, _ = passphrase_to_key("MauvaisMotDePasse", salt)
+    try:
+        spn.decrypt(enc, mk2)
+        raise AssertionError("Mauvaise clé non détectée !")
+    except ValueError as e:
+        print(f"Mauvaise clé : détectée ✓ ({e})")
+
+    print(f"\n=== PROPRIÉTÉS ===")
+    print(f"  Confidentialité     : ChaCha20-Poly1305 (RFC 8439)")
+    print(f"  Auth par secteur    : Poly1305 (16B tag)")
+    print(f"  Auth globale        : HMAC-SHA256 (32B)")
+    print(f"  KDF                 : PBKDF2-SHA256, 300 000 itérations")
+    print(f"  Nonce global        : os.urandom(24B), nonce/secteur 12B")
+    print(f"  Nonce/secteur       : HKDF(global_nonce, secteur)")
+    print(f"  Couche géométrique  : diversification clé via SPN Ref256+Ref360")
+    print(f"  max_DDT S-box       : ≤ 4 [Nyberg 1994]")
+    print(f"\n  Sécurité effective  : ChaCha20-Poly1305 (standard éprouvé)")
+    print(f"  Apport géométrique  : diversification de clé originale,")
+    print(f"                        résistance formelle à évaluer")
 
 if __name__ == '__main__':
     demo()
