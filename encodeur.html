@@ -434,6 +434,7 @@
               <b>4. Chiffrement fichier</b> — SPN géométrique (Ref256+Ref360) en couche de diversification de clé, AES-256-GCM en couche de chiffrement authentifié (voir l'onglet Chiffrement).<br><br>
               <b>5. Référents 256 et 360</b> — les tables de formes géométriques (croix ansée, Jacquard) qui alimentent les quatre composants ci-dessus.<br><br>
               <b>Note sur les substitutions de chiffrement :</b> la référence Python (<code>secu_box.py</code>, <code>vault_lib.py</code>, <code>disk_lib.py</code>) utilise XChaCha20-Poly1305, absent de l'API Web Crypto des navigateurs. AES-256-GCM lui est substitué dans cette page — même classe de garantie (AEAD, 256 bits, standard audité) via l'implémentation native du navigateur plutôt qu'une implémentation ChaCha20 maison. X25519 est en revanche implémenté nativement et identiquement des deux côtés.<br><br>
+              <b>Écart connu — dérivation de clé du Vault :</b> depuis sa version 1.2, <code>vault_lib.py</code> utilise Argon2id (memory-hard, résistant GPU/ASIC) au lieu de PBKDF2 pour sa dérivation de clé interne. Les navigateurs n'ont ni Argon2id ni scrypt en natif — contrairement aux cas ci-dessus, il n'existe pas d'équivalent Web Crypto à substituer sans ajouter une dépendance externe. Le Vault de cette page reste donc sur PBKDF2 (300 000 itérations) et, de ce fait, moins résistant au brute-force par GPU/ASIC que son homologue Python.<br><br>
               <b>Avertissement général :</b> SecuBox est un système expérimental basé sur des constructions géométriques originales. La couche cryptographique (AES-256-GCM, X25519, HKDF, PBKDF2) est standard et auditée. La couche géométrique (La Livrée d'Hermès) est en cours d'évaluation formelle — voir l'audit cryptologique externe du 2026-09-10 mentionné dans les onglets Chiffrement et Déchiffrer.
             </div>
           </div>
@@ -659,7 +660,7 @@
       posI += available;
     }
     const nBytes = Math.floor(nPos/2); // 2 nibbles par octet
-    const overhead = 4+12+16;
+    const overhead = 4+32+12+16; // header + commitment HMAC + nonce AES-GCM + tag AES-GCM
     return Math.max(0, nBytes - overhead);
   }
 
@@ -668,9 +669,29 @@
   function stegByteToNibs(b){ return [b>>4, b&0xF]; }
   function stegNibsToByte(hi, lo){ return ((hi&0xF)<<4)|(lo&0xF); }
 
+  // Clé de key commitment dédiée (HKDF depuis stegKey) — l'engagement HMAC
+  // qu'elle produit est vérifié AVANT toute tentative de déchiffrement, ce
+  // qui élimine les attaques par partitioning oracle (un même texte chiffré
+  // qui se déchiffrerait « valablement » sous plusieurs clés différentes).
+  async function stegCommitKey(stegKey){
+    const keyMaterial = await crypto.subtle.importKey('raw', stegKey, 'HKDF', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt: new TextEncoder().encode('commit-v1'), info: new TextEncoder().encode('key-commitment')}, keyMaterial, 256);
+    return new Uint8Array(bits);
+  }
+  async function stegHmacSha256(key, data){
+    const k = await crypto.subtle.importKey('raw', key, {name:'HMAC', hash:'SHA-256'}, false, ['sign']);
+    return new Uint8Array(await crypto.subtle.sign('HMAC', k, data));
+  }
+  function stegTimingSafeEqual(a,b){
+    if(a.length!==b.length) return false;
+    let d=0; for(let i=0;i<a.length;i++) d|=a[i]^b[i];
+    return d===0;
+  }
+
   // Chiffre le message avec AES-256-GCM avant dissimulation (substitué à
   // XChaCha20-Poly1305, absent de l'API Web Crypto — voir note en tête de
-  // section). Format : [4B longueur_inner][12B nonce][ciphertext+16B tag].
+  // section), plus un engagement de clé (key commitment) HMAC-SHA256.
+  // Format : [4B longueur_totale][32B commitment][12B nonce][ciphertext+16B tag].
   async function stegEncryptPayload(message, stegKey){
     const msgBytes = new TextEncoder().encode(message.toUpperCase());
     const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -678,9 +699,13 @@
     const ctBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv:nonce, tagLength:128}, key, msgBytes);
     const inner = new Uint8Array(12+ctBuf.byteLength);
     inner.set(nonce, 0); inner.set(new Uint8Array(ctBuf), 12);
-    const payload = new Uint8Array(4+inner.length);
-    new DataView(payload.buffer, 0, 4).setUint32(0, inner.length, false);
-    payload.set(inner, 4);
+    const ck = await stegCommitKey(stegKey);
+    const commit = await stegHmacSha256(ck, inner);
+    const innerPayload = new Uint8Array(32+inner.length);
+    innerPayload.set(commit, 0); innerPayload.set(inner, 32);
+    const payload = new Uint8Array(4+innerPayload.length);
+    new DataView(payload.buffer, 0, 4).setUint32(0, innerPayload.length, false);
+    payload.set(innerPayload, 4);
     return payload;
   }
 
@@ -688,11 +713,17 @@
     if(vals.length < 8) throw new Error('Grille trop petite.');
     const headerBytes = new Uint8Array(4);
     for(let i=0;i<4;i++) headerBytes[i] = stegNibsToByte(vals[i*2], vals[i*2+1]);
-    const innerLen = new DataView(headerBytes.buffer).getUint32(0, false);
-    const need = 8 + innerLen*2;
+    const totalLen = new DataView(headerBytes.buffer).getUint32(0, false);
+    const need = 8 + totalLen*2;
     if(vals.length < need) throw new Error(`Positions insuffisantes : ${vals.length} < ${need}`);
-    const inner = new Uint8Array(innerLen);
-    for(let i=0;i<innerLen;i++) inner[i] = stegNibsToByte(vals[8+i*2], vals[8+i*2+1]);
+    const innerPayload = new Uint8Array(totalLen);
+    for(let i=0;i<totalLen;i++) innerPayload[i] = stegNibsToByte(vals[8+i*2], vals[8+i*2+1]);
+    if(innerPayload.length < 32) throw new Error('Payload trop court (key commitment manquant).');
+    const commitRecv = innerPayload.slice(0,32);
+    const inner = innerPayload.slice(32);
+    const ck = await stegCommitKey(stegKey);
+    const commitCalc = await stegHmacSha256(ck, inner);
+    if(!stegTimingSafeEqual(commitRecv, commitCalc)) throw new Error('Key commitment invalide — clé incorrecte ou données altérées.');
     const nonce = inner.slice(0, 12);
     const ct = inner.slice(12);
     const key = await crypto.subtle.importKey('raw', stegKey, {name:'AES-GCM'}, false, ['decrypt']);
@@ -819,6 +850,16 @@
     return new Uint8Array(bits);
   }
 
+  // Sépare la clé maître en deux sous-clés indépendantes (HKDF) : la
+  // grammaire ne révèle rien sur la clé de chiffrement et vice-versa.
+  async function carterSplitKeys(masterKey){
+    const keyMaterial = await crypto.subtle.importKey('raw', masterKey, 'HKDF', false, ['deriveBits']);
+    const salt = new TextEncoder().encode('Carter-v2');
+    const xchachaBits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt, info: new TextEncoder().encode('encrypt')}, keyMaterial, 256);
+    const grammarBits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt, info: new TextEncoder().encode('grammar')}, keyMaterial, 256);
+    return { xchachaKey: new Uint8Array(xchachaBits), grammarKey: new Uint8Array(grammarBits) };
+  }
+
   async function carterGrammar(masterKey, ref256Len){
     const keyMaterial = await crypto.subtle.importKey('raw', masterKey, 'HKDF', false, ['deriveBits']);
     const bits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt: new TextEncoder().encode('Carter-grammar-v1'), info: new TextEncoder().encode('block-roles-and-forms')}, keyMaterial, CARTER_N*4*8);
@@ -851,11 +892,12 @@
   }
 
   async function carterCapacity(masterKey, ref256){
-    const grammar = await carterGrammar(masterKey, ref256.length);
+    const { grammarKey } = await carterSplitKeys(masterKey);
+    const grammar = await carterGrammar(grammarKey, ref256.length);
     const nMsg = grammar.filter(g=>g.role===CARTER_MESSAGE).length;
     const nStr = grammar.filter(g=>g.role===CARTER_STRUCTURED).length;
     const nPur = grammar.filter(g=>g.role===CARTER_PURE).length;
-    const overhead = 4+12+16; // AES-256-GCM (12B nonce), pas les 24B XChaCha20 de la référence Python
+    const overhead = 4+32+12+16; // header + commitment HMAC + nonce AES-GCM + tag AES-GCM
     return {
       blocsMessage: nMsg, blocsStructure: nStr, blocsPurs: nPur,
       charsMax: Math.max(0, nMsg*3 - overhead),
@@ -864,9 +906,10 @@
   }
 
   async function encodeCarter(message, masterKey, ref256){
-    const grammar = await carterGrammar(masterKey, ref256.length);
+    const { xchachaKey, grammarKey } = await carterSplitKeys(masterKey);
+    const grammar = await carterGrammar(grammarKey, ref256.length);
     const nMsg = grammar.filter(g=>g.role===CARTER_MESSAGE).length;
-    const payload = await stegEncryptPayload(message, masterKey);
+    const payload = await stegEncryptPayload(message, xchachaKey);
     const nibbles = [];
     for(const b of payload){ nibbles.push(b>>4); nibbles.push(b&0xF); }
     if(nibbles.length > nMsg*6) throw new Error(`Message trop long pour la grammaire dérivée : ${Math.floor(nibbles.length/2)} bytes > ${nMsg*3} bytes disponibles. Changer la clé ou réduire le message.`);
@@ -887,7 +930,8 @@
   }
 
   async function decodeCarter(grid, masterKey, ref256){
-    const grammar = await carterGrammar(masterKey, ref256.length);
+    const { xchachaKey, grammarKey } = await carterSplitKeys(masterKey);
+    const grammar = await carterGrammar(grammarKey, ref256.length);
     const vals = [];
     for(let i=0;i<grammar.length;i++){
       const g = grammar[i];
@@ -895,7 +939,7 @@
       const br = Math.floor(i/CARTER_SIDE), bc = i%CARTER_SIDE;
       for(const [gr,gc] of carterPositions(br,bc,g,ref256)) vals.push(grid[gr][gc]);
     }
-    return stegDecryptPayload(vals, masterKey);
+    return stegDecryptPayload(vals, xchachaKey);
   }
 
   function stegDrawGrid(grid, keyBArr, keyC, key2, ref256, canvasId){
@@ -1313,6 +1357,15 @@
   // la seule passphrase, sans avoir à conserver un sel séparé. Manifest,
   // entrées et MAC ont chacun leur propre clé dérivée par HKDF-SHA256
   // depuis le sel interne du vault (aléatoire, embarqué dans le fichier).
+  //
+  // ÉCART CONNU vs vault_lib.py v1.2 : la référence Python remplace PBKDF2
+  // par Argon2id (memory-hard, résistant GPU/ASIC) pour la dérivation
+  // interne des sous-clés. L'API Web Crypto des navigateurs n'a ni Argon2id
+  // ni scrypt en natif — contrairement à AES-256-GCM (pour XChaCha20) ou
+  // X25519 (natif), il n'existe pas d'équivalent natif à substituer ici.
+  // Décision explicite : garder PBKDF2 plutôt que d'ajouter une dépendance
+  // externe (bibliothèque Argon2id en WebAssembly) — ce vault JS reste donc
+  // moins résistant au brute-force par GPU/ASIC que son homologue Python.
   // ============================================================
   const VAULT_MAGIC = new Uint8Array([0x53,0x42,0x56,0x54]); // "SBVT"
   const VAULT_VERSION = 1;

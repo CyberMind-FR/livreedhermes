@@ -1,3 +1,4 @@
+import hashlib
 # © Anibal Edelberto Amiot 2026 — La Livrée d'Hermès
 # AGPL v3 (non-commercial) / Commercial license: anibaledel@gmail.com
 # Geometric constructions: IACR ePrint 2026 (CC BY) — Patent: FR2865054
@@ -63,30 +64,54 @@ def _byte_to_nibs(b: int) -> Tuple[int,int]:
 def _nibs_to_byte(hi: int, lo: int) -> int:
     return ((hi & 0xF) << 4) | (lo & 0xF)
 
-# ── Chiffrement du message ────────────────────────────────────────────────────
+# ── Chiffrement du message — Key commitment + XChaCha20 ──────────────────────
+import hmac as _hmac_mod
+
+def _commit_key(steg_key: bytes) -> bytes:
+    """Clé HMAC dédiée au key commitment (séparée de la clé XChaCha20)."""
+    return _HKDF(_hashes.SHA256(), 32,
+                  salt=b'commit-v1',
+                  info=b'key-commitment').derive(steg_key)
+
 def _encrypt(message: str, steg_key: bytes) -> bytes:
     """
-    Chiffre avec XChaCha20-Poly1305 (nonce 24 bytes). [A3]
-    Format : [4B longueur_inner][inner = nonce(24) + ciphertext + tag(16)]
+    Chiffre avec XChaCha20-Poly1305 + key commitment HMAC-SHA256 [correction 3].
+
+    Format : [4B total_size][32B HMAC(commit_key, inner)][inner]
+      inner = nonce(24) + ciphertext + tag(16)
+
+    Key commitment : ce ciphertext ne peut déchiffrer valablement
+    que sous une seule clé — élimine les partitioning oracle attacks.
     """
-    msg_b = message.upper().encode('ascii', errors='replace')
-    inner = _xchacha_enc(steg_key, msg_b)
-    return struct.pack('>I', len(inner)) + inner
+    msg_b    = message.upper().encode('ascii', errors='replace')
+    inner    = _xchacha_enc(steg_key, msg_b)
+    ck       = _commit_key(steg_key)
+    commit   = _hmac_mod.new(ck, inner, hashlib.sha256).digest()  # 32 bytes
+    payload  = commit + inner
+    return struct.pack('>I', len(payload)) + payload
 
 def _decrypt(vals: List[int], steg_key: bytes) -> str:
     """
-    Lit exactement le bon nombre de nibbles (via le header de longueur),
-    puis déchiffre. Lève ValueError si tag invalide.
+    Vérifie le key commitment PUIS déchiffre.
+    Double protection : HMAC invalide → rejet immédiat sans tentative de déchiffrement.
     """
     if len(vals) < 8:
         raise ValueError("Grille trop petite")
-    header = bytes([_nibs_to_byte(vals[i*2], vals[i*2+1]) for i in range(4)])
-    inner_len = struct.unpack('>I', header)[0]
-    need = 8 + inner_len * 2
+    header    = bytes([_nibs_to_byte(vals[i*2], vals[i*2+1]) for i in range(4)])
+    total_len = struct.unpack('>I', header)[0]
+    need      = 8 + total_len * 2
     if len(vals) < need:
         raise ValueError(f"Positions insuffisantes : {len(vals)} < {need}")
-    inner = bytes([_nibs_to_byte(vals[8+i*2], vals[8+i*2+1])
-                   for i in range(inner_len)])
+    payload   = bytes([_nibs_to_byte(vals[8+i*2], vals[8+i*2+1])
+                       for i in range(total_len)])
+    if len(payload) < 32:
+        raise ValueError("Payload trop court (key commitment manquant)")
+    commit_recv, inner = payload[:32], payload[32:]
+    # Vérifier key commitment avant déchiffrement
+    ck          = _commit_key(steg_key)
+    commit_calc = _hmac_mod.new(ck, inner, hashlib.sha256).digest()
+    if not _hmac_mod.compare_digest(commit_recv, commit_calc):
+        raise ValueError("Key commitment invalide — clé incorrecte ou données altérées")
     try:
         pt = _xchacha_dec(steg_key, inner)
     except Exception:
@@ -272,6 +297,22 @@ CARTER_N     = CARTER_SIDE ** 2               # 225 blocs
 
 _PURE, _STRUCTURED, _MESSAGE = 0, 1, 2
 
+def _carter_split(master_key: bytes):
+    """
+    Séparation explicite des clés Carter [correction 2].
+    Deux usages distincts → deux sous-clés indépendantes via HKDF.
+      xchacha_key : chiffrement XChaCha20-Poly1305
+      grammar_key : dérivation de la grammaire (rôles + formes)
+    Propriété : la grammaire ne révèle rien sur la clé de chiffrement et vice-versa.
+    """
+    xchacha_key = _HKDF(_hashes.SHA256(), 32,
+                         salt=b'Carter-v2',
+                         info=b'encrypt').derive(master_key)
+    grammar_key = _HKDF(_hashes.SHA256(), 32,
+                         salt=b'Carter-v2',
+                         info=b'grammar').derive(master_key)
+    return xchacha_key, grammar_key
+
 def _carter_grammar(master_key: bytes, ref256: List[Dict]) -> List[Dict]:
     """
     Dérive la grammaire Carter depuis la clé maître (HKDF-SHA256).
@@ -321,10 +362,11 @@ def encode_carter(message: str, master_key: bytes,
     grid_to_csv() pour sérialiser, csv_to_grid() pour désérialiser.
     """
     import secrets as _sec
-    grammar = _carter_grammar(master_key, ref256)
+    xchacha_key, grammar_key = _carter_split(master_key)
+    grammar = _carter_grammar(grammar_key, ref256)
     n_msg   = sum(1 for g in grammar if g['role'] == _MESSAGE)
 
-    payload = _encrypt(message, master_key)
+    payload = _encrypt(message, xchacha_key)
     nibbles = []
     for b in payload:
         hi, lo = _byte_to_nibs(b)
@@ -353,18 +395,20 @@ def decode_carter(grid: List[List[int]], master_key: bytes,
     Décode une grille Carter. La grammaire est re-dérivée depuis la clé.
     Lève ValueError si la clé est incorrecte (tag Poly1305 invalide).
     """
-    grammar = _carter_grammar(master_key, ref256)
+    xchacha_key, grammar_key = _carter_split(master_key)
+    grammar = _carter_grammar(grammar_key, ref256)
     vals = []
     for i, g in enumerate(grammar):
         if g['role'] != _MESSAGE: continue
         br, bc = i // CARTER_SIDE, i % CARTER_SIDE
         vals.extend(grid[gr][gc]
                     for gr, gc in _carter_positions(br, bc, g, ref256))
-    return _decrypt(vals, master_key)
+    return _decrypt(vals, xchacha_key)
 
 def carter_capacity(master_key: bytes, ref256: List[Dict]) -> Dict:
     """Retourne les statistiques de capacité de la grammaire dérivée."""
-    grammar = _carter_grammar(master_key, ref256)
+    _, grammar_key = _carter_split(master_key)
+    grammar = _carter_grammar(grammar_key, ref256)
     n_msg = sum(1 for g in grammar if g['role'] == _MESSAGE)
     n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
     n_pur = sum(1 for g in grammar if g['role'] == _PURE)
@@ -399,6 +443,14 @@ def _load_ref360() -> List[Dict]:
     return [f for f in raw
             if (isinstance(f['positions'], dict) and
                 sum(len(v) for v in f['positions'].values()) == 24)]
+
+def _carter360_split(master_key: bytes):
+    """Séparation des clés pour Carter 360 (salt distinct du Carter 256)."""
+    xchacha_key = _HKDF(_hashes.SHA256(), 32,
+                         salt=b'Carter360-v2', info=b'encrypt').derive(master_key)
+    grammar_key = _HKDF(_hashes.SHA256(), 32,
+                         salt=b'Carter360-v2', info=b'grammar').derive(master_key)
+    return xchacha_key, grammar_key
 
 def _carter360_grammar(master_key: bytes, ref360: List[Dict]) -> List[Dict]:
     """
@@ -449,10 +501,11 @@ def encode_carter_360(message: str, master_key: bytes,
     if ref360 is None:
         ref360 = _load_ref360()
 
-    grammar = _carter360_grammar(master_key, ref360)
+    xchacha_key, grammar_key = _carter360_split(master_key)
+    grammar = _carter360_grammar(grammar_key, ref360)
     n_msg   = sum(1 for g in grammar if g['role'] == _MESSAGE)
 
-    payload = _encrypt(message, master_key)
+    payload = _encrypt(message, xchacha_key)
     nibbles = []
     for b in payload:
         hi, lo = _byte_to_nibs(b)
@@ -479,21 +532,23 @@ def decode_carter_360(grid: List[List[int]], master_key: bytes,
     """Décode une grille Carter 180×180. Lève ValueError si clé incorrecte."""
     if ref360 is None:
         ref360 = _load_ref360()
-    grammar = _carter360_grammar(master_key, ref360)
+    xchacha_key, grammar_key = _carter360_split(master_key)
+    grammar = _carter360_grammar(grammar_key, ref360)
     vals = []
     for i, g in enumerate(grammar):
         if g['role'] != _MESSAGE: continue
         br, bc = i // CARTER360_SIDE, i % CARTER360_SIDE
         vals.extend(grid[gr][gc]
                     for gr, gc in _carter360_positions(br, bc, g, ref360))
-    return _decrypt(vals, master_key)
+    return _decrypt(vals, xchacha_key)
 
 def carter360_capacity(master_key: bytes,
                         ref360: Optional[List[Dict]] = None) -> Dict:
     """Statistiques de capacité de la grammaire Carter 360."""
     if ref360 is None:
         ref360 = _load_ref360()
-    grammar = _carter360_grammar(master_key, ref360)
+    _, grammar_key = _carter360_split(master_key)
+    grammar = _carter360_grammar(grammar_key, ref360)
     n_msg = sum(1 for g in grammar if g['role'] == _MESSAGE)
     n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
     n_pur = sum(1 for g in grammar if g['role'] == _PURE)
@@ -521,6 +576,14 @@ CARTER_MIX_META  = 12           # méta-bloc 12×12
 CARTER_MIX_SIDE  = 15           # méta-blocs par côté (180/12)
 CARTER_MIX_N     = 225          # total méta-blocs
 _REF256, _REF360 = 0, 1         # identifiants de référent
+
+def _carter_mix_split(master_key: bytes):
+    """Séparation des clés pour Carter mixte (salt distinct)."""
+    xchacha_key = _HKDF(_hashes.SHA256(), 32,
+                         salt=b'CarterMix-v2', info=b'encrypt').derive(master_key)
+    grammar_key = _HKDF(_hashes.SHA256(), 32,
+                         salt=b'CarterMix-v2', info=b'grammar').derive(master_key)
+    return xchacha_key, grammar_key
 
 def _carter_mix_grammar(master_key: bytes,
                          ref256: List[Dict],
@@ -601,13 +664,14 @@ def encode_carter_mix(message: str, master_key: bytes,
     if ref360 is None:
         ref360 = _load_ref360()
 
-    grammar = _carter_mix_grammar(master_key, ref256, ref360)
+    xchacha_key, grammar_key = _carter_mix_split(master_key)
+    grammar = _carter_mix_grammar(grammar_key, ref256, ref360)
     # Calculer la capacité
     nibbles_cap = sum(len(_mix_positions(i//CARTER_MIX_SIDE, i%CARTER_MIX_SIDE,
                                           g, ref256, ref360))
                       for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
 
-    payload = _encrypt(message, master_key)
+    payload = _encrypt(message, xchacha_key)
     nibbles = []
     for b in payload:
         hi, lo = _byte_to_nibs(b)
@@ -635,14 +699,15 @@ def decode_carter_mix(grid: List[List[int]], master_key: bytes,
     """Décode une grille Carter mixte 180×180."""
     if ref360 is None:
         ref360 = _load_ref360()
-    grammar = _carter_mix_grammar(master_key, ref256, ref360)
+    xchacha_key, grammar_key = _carter_mix_split(master_key)
+    grammar = _carter_mix_grammar(grammar_key, ref256, ref360)
     vals = []
     for i, g in enumerate(grammar):
         if g['role'] != _MESSAGE: continue
         mbr, mbc = i // CARTER_MIX_SIDE, i % CARTER_MIX_SIDE
         vals.extend(grid[gr][gc]
                     for gr, gc in _mix_positions(mbr, mbc, g, ref256, ref360))
-    return _decrypt(vals, master_key)
+    return _decrypt(vals, xchacha_key)
 
 def carter_mix_capacity(master_key: bytes,
                          ref256: List[Dict],
@@ -650,7 +715,8 @@ def carter_mix_capacity(master_key: bytes,
     """Statistiques de capacité de la grammaire Carter mixte."""
     if ref360 is None:
         ref360 = _load_ref360()
-    grammar = _carter_mix_grammar(master_key, ref256, ref360)
+    _, grammar_key = _carter_mix_split(master_key)
+    grammar = _carter_mix_grammar(grammar_key, ref256, ref360)
     n256m = sum(1 for g in grammar if g['role']==_MESSAGE and g['ref']==_REF256)
     n360m = sum(1 for g in grammar if g['role']==_MESSAGE and g['ref']==_REF360)
     n256s = sum(1 for g in grammar if g['role']==_STRUCTURED and g['ref']==_REF256)

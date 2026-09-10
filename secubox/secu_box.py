@@ -25,6 +25,15 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF2
 from cryptography.hazmat.primitives import hashes as _hashes2
+from argon2.low_level import hash_secret_raw as _argon2_raw, Type as _Argon2Type
+
+def _argon2id_identity(passphrase: str, salt: bytes) -> bytes:
+    """Argon2id pour chiffrement des identités (time=3, mem=64MB)."""
+    return _argon2_raw(
+        secret=passphrase.encode(),
+        salt=salt[:16],
+        time_cost=3, memory_cost=65536, parallelism=4,
+        hash_len=32, type=_Argon2Type.ID)
 
 def _xchacha_enc2(key, pt, aad=b''):
     n=os.urandom(24)
@@ -63,14 +72,14 @@ class Identity:
         raw   = self._priv.private_bytes(serialization.Encoding.Raw,
                   serialization.PrivateFormat.Raw, serialization.NoEncryption())
         salt  = os.urandom(16)
-        key   = hashlib.pbkdf2_hmac('sha256', passphrase.encode(), salt, 300_000, 32)
-        return salt + _xchacha_enc2(key, raw, b'SecuBox-Identity-v1')
+        key   = _argon2id_identity(passphrase, salt)
+        return salt + _xchacha_enc2(key, raw, b'SecuBox-Identity-v2')
 
     @classmethod
     def from_export(cls, data: bytes, passphrase: str) -> 'Identity':
         salt, enc = data[:16], data[16:]
-        key = hashlib.pbkdf2_hmac('sha256', passphrase.encode(), salt, 300_000, 32)
-        raw = _xchacha_dec2(key, enc, b'SecuBox-Identity-v1')
+        key = _argon2id_identity(passphrase, salt)
+        raw = _xchacha_dec2(key, enc, b'SecuBox-Identity-v2')
         return cls(raw)
 
 
@@ -273,7 +282,7 @@ def demo():
     print("\n6. IDENTITÉ EXPORTÉE\n")
     exported  = alice.export_private("passphrase_test")
     alice2    = Identity.from_export(exported, "passphrase_test")
-    print(f"   {len(exported)} bytes chiffrés (PBKDF2+XChaCha20) ✓")
+    print(f"   {len(exported)} bytes chiffrés (Argon2id+XChaCha20) ✓")
     print(f"   Restaurée identique : {alice.public_bytes == alice2.public_bytes} ✓")
 
     print("\n=== ARCHITECTURE SECUBOX ===\n")
