@@ -208,7 +208,7 @@
             <h2>Échange de clés — X25519 éphémère</h2>
             <p class="ref-note">Permet à deux correspondants de dériver la même session sans jamais transmettre de secret : chacun génère une paire de clés éphémère X25519, échange sa clé publique, et dérive localement la même clé de session par ECDH + HKDF-SHA256. La clé privée éphémère est détruite après dérivation (forward secrecy).</p>
             <div class="enc-info-box">
-              <b>Avertissement :</b> la clé éphémère est générée dans votre navigateur et n'est jamais transmise. La session ne survit pas à la fermeture de l'onglet ni à l'effacement des données du site (forward secrecy). Vérifiez le fingerprint avec votre correspondant par un canal séparé (appel vocal, QR code) avant d'échanger des messages sensibles.
+              <b>Avertissement :</b> la clé éphémère est générée dans votre navigateur et n'est jamais transmise. La session ne survit pas à la fermeture de l'onglet ni à l'effacement des données du site (forward secrecy). <b>Cet échange n'est authentifié que par vous :</b> rien n'empêche un relais de substituer ses propres clés, et seule la comparaison de la chaîne d'authentification affichée après dérivation le révèle. La lire en entier avec votre correspondant par un canal séparé (appel vocal, rencontre) avant tout message sensible — une comparaison partielle ou omise laisse l'échange sans protection. Pour un échange authentifié sans cette manipulation, utiliser la CLI Python (<code>secu-box exchange offer</code>), qui lie les identités long-terme à la session.
             </div>
           </div>
 
@@ -428,7 +428,7 @@
             <h2>Architecture SecuBox</h2>
             <p>SecuBox assemble cinq composants indépendants, chacun documenté et vérifié séparément dans ses propres onglets :</p>
             <div class="enc-info-box">
-              <b>1. Exchange (X25519)</b> — échange de clés éphémère par courbe elliptique Curve25519 (natif dans l'API Web Crypto de ce navigateur), HKDF-SHA256 avec information canonique (min(clé A, clé B) ‖ max(clé A, clé B)) pour dériver la même session des deux côtés sans jamais transmettre de secret. Forward secrecy : la clé privée éphémère est détruite après dérivation.<br><br>
+              <b>1. Exchange (X25519)</b> — échange de clés éphémère par courbe elliptique Curve25519 (natif dans l'API Web Crypto de ce navigateur), HKDF-SHA256 avec information canonique (min(clé A, clé B) ‖ max(clé A, clé B)) pour dériver la même session des deux côtés sans jamais transmettre de secret. Forward secrecy : la clé privée éphémère est détruite après dérivation. L'authentification repose entièrement sur la comparaison hors bande de la chaîne d'authentification de 128 bits affichée après dérivation ; sans elle, un relais actif lit tout. La CLI Python authentifie de son côté par triple DH sur les identités long-terme, et les deux implémentations ne sont, de ce fait, plus interopérables pour l'échange de clés.<br><br>
               <b>2. Message / Déchiffrer</b> — stéganographie géométrique (voir ci-dessus), utilisant les clés dérivées par la session Exchange active.<br><br>
               <b>3. Vault</b> — chiffrement de fichiers en local, AES-256-GCM par entrée, manifest chiffré, HMAC-SHA256 global (architecture inspirée de <code>vault_lib.py</code>).<br><br>
               <b>4. Chiffrement fichier</b> — SPN géométrique (Ref256+Ref360) en couche de diversification de clé, AES-256-GCM en couche de chiffrement authentifié (voir l'onglet Chiffrement).<br><br>
@@ -1076,13 +1076,20 @@
   }
 
   // ============================================================
-  // Exchange — échange de clés X25519 éphémère (secu_box.py porté en JS)
-  // ECDH éphémère + HKDF-SHA256 (info canonique) → clé stéganographique +
-  // graine géométrique ; les clés B/C/2 sont dérivées de la graine par un
-  // PRNG HMAC-SHA256 déterministe, dans le MÊME ORDRE que Python (tout
-  // Clé C d'abord pour tous les blocs, puis toute Clé 2) — un écart d'ordre
-  // romprait l'interopérabilité entre ce site et la CLI Python, seul point
-  // de cette page où les deux côtés doivent réellement s'accorder bit à bit.
+  // Exchange — échange de clés X25519 éphémère, authentifié par comparaison
+  // hors bande d'une chaîne d'authentification (SAS).
+  //
+  // DIVERGENCE ASSUMÉE AVEC LA CLI PYTHON, depuis l'audit du 2026-09-10 :
+  // secu_box.py est passé à un triple DH qui lie les identités long-terme à
+  // la session, ce qui écarte un relais actif sans rien demander à
+  // l'utilisateur. Ce portage ne peut pas suivre : la CLI protège son
+  // identité exportée par Argon2id, absent de l'API Web Crypto, donc le
+  // navigateur ne peut ni lire une identité de la CLI ni en produire une
+  // qu'elle accepterait. Cette page reste donc sur un échange éphémère
+  // authentifié par SAS — sûr si et seulement si l'utilisateur compare la
+  // chaîne. Les sessions des deux implémentations ne sont plus
+  // interopérables ; les clés B/C/2 restent dérivées dans le même ordre
+  // qu'en Python (tout Clé C d'abord, puis toute Clé 2).
   // X25519 est nativement supporté par l'API Web Crypto de ce navigateur
   // (vérifié) — pas de substitution nécessaire, contrairement à AES-256-GCM
   // pour XChaCha20-Poly1305 ailleurs sur cette page.
@@ -1159,13 +1166,26 @@
     const sidBuf = new Uint8Array(await crypto.subtle.digest('SHA-256', shared));
     const sessionId = scBytesToHex(sidBuf.slice(0,8));
 
-    const geoKeys = await scDeriveGeoKeys(geoSeed, ref256.length, gridSize, blockSize);
-    return { stegKeyHex: scBytesToHex(stegKey), keyB: geoKeys.keyB, keyC: geoKeys.keyC, key2: geoKeys.key2, sessionId, gridSize };
-  }
+    // Chaine d'authentification comparee de vive voix (SAS). CORRECTIF AUDIT
+    // 2026-09-10 : elle valait 48 bits, derives du session ID. Un relais actif
+    // controle ses deux clés éphémères et peut donc les tirer jusqu'a ce que
+    // les deux sessions affichent la MEME empreinte : un paradoxe des
+    // anniversaires sur 48 bits, soit environ 2 x 2^24 echanges X25519 —
+    // mesure a une heure en Python mono-coeur, quelques minutes avec une
+    // implementation optimisee. La comparaison hors bande ne detectait donc
+    // pas un adversaire determine. Portee a 128 bits (2^64 par recherche
+    // d'anniversaire, hors de portee) et derivee du materiel HKDF plutot que
+    // du session ID, qui est lui-meme publie.
+    const sasBits = await crypto.subtle.deriveBits(
+      {name:'HKDF', hash:'SHA-256',
+       salt: new TextEncoder().encode('SecuBox-Session-v1'),
+       info: new TextEncoder().encode('session-auth-string')},
+      await crypto.subtle.importKey('raw', km, 'HKDF', false, ['deriveBits']), 128);
+    const authString = Array.from(new Uint8Array(sasBits))
+      .map(b=>b.toString(16).padStart(2,'0')).join(':');
 
-  async function scFingerprint(sessionId){
-    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionId)));
-    return Array.from(h.slice(0,6)).map(b=>b.toString(16).padStart(2,'0')).join(':');
+    const geoKeys = await scDeriveGeoKeys(geoSeed, ref256.length, gridSize, blockSize);
+    return { stegKeyHex: scBytesToHex(stegKey), keyB: geoKeys.keyB, keyC: geoKeys.keyC, key2: geoKeys.key2, sessionId, authString, gridSize };
   }
 
   const SC_SESSION_KEY = 'secubox_session_v1';
@@ -1257,9 +1277,8 @@
     try{
       const session = await scDeriveSession(scEphemeralKeyPair, scMyPubHex, theirPubHex, REF256, 60, 1);
       scSaveSession(session);
-      const fp = await scFingerprint(session.sessionId);
       resultBox.hidden = false;
-      resultEl.innerHTML = `Session dérivée ✓<br>Session ID : <b>${session.sessionId}</b><br>Fingerprint : <b>${fp}</b><br>Forward secrecy : clé éphémère détruite ✓`;
+      resultEl.innerHTML = `Session dérivée ✓<br>Session ID : <b>${session.sessionId}</b><br>Chaîne d'authentification :<br><b style="word-break:break-all">${session.authString}</b><br>À lire à voix haute avec votre correspondant : si vos deux chaînes diffèrent, quelqu'un s'interpose. Ne pas échanger de message sensible avant cette vérification.<br>Forward secrecy : clé éphémère détruite ✓`;
       scEphemeralKeyPair = null; scMyPubHex = null;
       document.getElementById('sc-my-key').hidden = true;
       scRefreshActiveSessionUI();
