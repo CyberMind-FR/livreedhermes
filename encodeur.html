@@ -205,27 +205,34 @@
         <!-- EXCHANGE -->
         <div id="tab-exchange" class="enc-tab">
           <div class="enc-card">
-            <h2>Échange de clés — X25519 éphémère</h2>
-            <p class="ref-note">Permet à deux correspondants de dériver la même session sans jamais transmettre de secret : chacun génère une paire de clés éphémère X25519, échange sa clé publique, et dérive localement la même clé de session par ECDH + HKDF-SHA256. La clé privée éphémère est détruite après dérivation (forward secrecy).</p>
+            <h2>Échange de clés — X25519 authentifié (triple DH)</h2>
+            <p class="ref-note">Deux correspondants dérivent la même session sans transmettre de secret. Trois Diffie-Hellman entrent dans la dérivation : éphémère × éphémère pour la forward secrecy, puis éphémère × identité de chaque côté, ce qui lie les identités long terme à la session. Un relais qui substitue ses propres clés éphémères ne possède aucune des deux identités privées : il ne peut pas calculer la clé. Même protocole que la CLI Python — une session dérivée ici et une session dérivée par <code>secu-box exchange</code> aboutissent à la même clé.</p>
             <div class="enc-info-box">
-              <b>Avertissement :</b> la clé éphémère est générée dans votre navigateur et n'est jamais transmise. La session ne survit pas à la fermeture de l'onglet ni à l'effacement des données du site (forward secrecy). <b>Cet échange n'est authentifié que par vous :</b> rien n'empêche un relais de substituer ses propres clés, et seule la comparaison de la chaîne d'authentification affichée après dérivation le révèle. La lire en entier avec votre correspondant par un canal séparé (appel vocal, rencontre) avant tout message sensible — une comparaison partielle ou omise laisse l'échange sans protection. Pour un échange authentifié sans cette manipulation, utiliser la CLI Python (<code>secu-box exchange offer</code>), qui lie les identités long-terme à la session.
+              <b>Ce qui vous protège :</b> la vérification, par un canal séparé (appel vocal, rencontre), du fingerprint d'identité que l'offer de votre correspondant annonce. Sans elle, rien ne distingue votre correspondant d'un relais qui se présenterait avec sa propre identité. La chaîne d'authentification affichée après dérivation reste disponible en secours, si le fingerprint n'a pas pu être confronté avant.<br><br>
+              <b>Sur votre identité :</b> sa clé privée est conservée dans ce navigateur sous une forme que le code de la page ne peut pas lire — il peut seulement s'en servir pour dériver. Contrepartie : elle ne peut être ni sauvegardée ni déplacée vers un autre navigateur. Effacer les données du site la détruit définitivement, avec le fingerprint que vos correspondants connaissent. Une identité de la CLI Python ne peut pas non plus être importée ici : chaque côté garde la sienne, ce qui n'empêche pas les deux de dialoguer.
             </div>
           </div>
 
           <div class="enc-card">
-            <h2>Étape 1 — Votre clé éphémère</h2>
-            <button type="button" class="enc-btn" id="btnScGenerate">Générer ma clé éphémère</button>
+            <h2>Étape 0 — Votre identité</h2>
+            <div id="sc-identity-box" class="enc-info-box">Chargement…</div>
+            <button type="button" class="enc-btn" id="btnScCreateIdentity" hidden>Créer mon identité</button>
+          </div>
+
+          <div class="enc-card">
+            <h2>Étape 1 — Votre offer</h2>
+            <button type="button" class="enc-btn" id="btnScGenerate">Générer mon offer</button>
             <div id="sc-my-key" hidden style="margin-top:12px">
-              <label class="enc-label">Ma clé publique (à envoyer à votre correspondant)</label>
+              <label class="enc-label">Mon offer — identité ‖ éphémère, 128 caractères hex (à envoyer à votre correspondant)</label>
               <textarea class="enc-textarea" id="sc-my-pub" readonly style="min-height:50px"></textarea>
               <button type="button" class="enc-btn secondary" id="btnScCopyPub">Copier</button>
             </div>
           </div>
 
           <div class="enc-card">
-            <h2>Étape 2 — Clé de votre correspondant</h2>
-            <label class="enc-label">Clé publique reçue (64 caractères hex)</label>
-            <input type="text" class="enc-input" id="sc-their-pub" placeholder="Coller la clé publique du correspondant">
+            <h2>Étape 2 — Offer de votre correspondant</h2>
+            <label class="enc-label">Offer reçue (128 caractères hex)</label>
+            <input type="text" class="enc-input" id="sc-their-pub" placeholder="Coller l'offer du correspondant">
             <button type="button" class="enc-btn" id="btnScDerive">Dériver la session</button>
             <div id="sc-session-result" hidden style="margin-top:14px">
               <div class="enc-result-box" id="sc-session-info"></div>
@@ -430,7 +437,7 @@
             <h2>Architecture SecuBox</h2>
             <p>SecuBox assemble cinq composants indépendants, chacun documenté et vérifié séparément dans ses propres onglets :</p>
             <div class="enc-info-box">
-              <b>1. Exchange (X25519)</b> — échange de clés éphémère par courbe elliptique Curve25519 (natif dans l'API Web Crypto de ce navigateur), HKDF-SHA256 avec information canonique (min(clé A, clé B) ‖ max(clé A, clé B)) pour dériver la même session des deux côtés sans jamais transmettre de secret. Forward secrecy : la clé privée éphémère est détruite après dérivation. L'authentification repose entièrement sur la comparaison hors bande de la chaîne d'authentification de 128 bits affichée après dérivation ; sans elle, un relais actif lit tout. La CLI Python authentifie de son côté par triple DH sur les identités long-terme, et les deux implémentations ne sont, de ce fait, plus interopérables pour l'échange de clés.<br><br>
+              <b>1. Exchange (X25519)</b> — échange de clés authentifié par triple Diffie-Hellman sur courbe Curve25519 (natif dans l'API Web Crypto de ce navigateur) : éphémère × éphémère pour la forward secrecy, puis éphémère × identité de chaque côté, ce qui lie les identités long terme à la session. HKDF-SHA256 sur le transcript complet — les quatre clés publiques — dérive la clé de session. Un relais qui substitue ses clés éphémères ne possède aucune des deux identités privées et ne peut donc pas calculer la clé ; l'authentification tient à la vérification hors bande du fingerprint d'identité annoncé par l'offer. La clé privée éphémère est détruite après dérivation. <b>Même protocole que la CLI Python</b> : une session dérivée ici et une session dérivée par <code>secu-box exchange</code> aboutissent à la même clé — vérifié par dérivation croisée des deux implémentations. Seule l'identité elle-même n'est pas transportable d'un côté à l'autre : la CLI protège la sienne par Argon2id, absent de Web Crypto, et celle du navigateur est non extractible par construction. Chaque côté garde donc la sienne.<br><br>
               <b>2. Message / Déchiffrer</b> — stéganographie géométrique (voir ci-dessus), utilisant les clés dérivées par la session Exchange active.<br><br>
               <b>3. Vault</b> — chiffrement de fichiers en local, AES-256-GCM par entrée, manifest chiffré, HMAC-SHA256 global (architecture inspirée de <code>vault_lib.py</code>).<br><br>
               <b>4. Chiffrement fichier</b> — SPN géométrique (Ref256+Ref360) en couche de diversification de clé, AES-256-GCM en couche de chiffrement authentifié (voir l'onglet Chiffrement).<br><br>
@@ -1117,20 +1124,93 @@
   }
 
   // ============================================================
-  // Exchange — échange de clés X25519 éphémère, authentifié par comparaison
-  // hors bande d'une chaîne d'authentification (SAS).
+  // Exchange — échange de clés X25519 authentifié par triple DH, identique
+  // au protocole de secu_box.py. Une session dérivée ici et une session
+  // dérivée par la CLI Python aboutissent à la même clé.
   //
-  // DIVERGENCE ASSUMÉE AVEC LA CLI PYTHON, depuis l'audit du 2026-09-10 :
-  // secu_box.py est passé à un triple DH qui lie les identités long-terme à
-  // la session, ce qui écarte un relais actif sans rien demander à
-  // l'utilisateur. Ce portage ne peut pas suivre : la CLI protège son
-  // identité exportée par Argon2id, absent de l'API Web Crypto, donc le
-  // navigateur ne peut ni lire une identité de la CLI ni en produire une
-  // qu'elle accepterait. Cette page reste donc sur un échange éphémère
-  // authentifié par SAS — sûr si et seulement si l'utilisateur compare la
-  // chaîne. Les sessions des deux implémentations ne sont plus
-  // interopérables ; les clés B/C/2 restent dérivées dans le même ordre
-  // qu'en Python (tout Clé C d'abord, puis toute Clé 2).
+  // Un portage antérieur s'en tenait à un échange éphémère authentifié par
+  // comparaison vocale d'une chaîne (SAS), au motif que la CLI protège son
+  // identité exportée par Argon2id, absent de l'API Web Crypto. Ce motif
+  // confondait deux choses : Argon2id empêche de TRANSPORTER une identité
+  // entre la CLI et le navigateur, il n'empêche pas les deux implémentations
+  // de PARLER ensemble. Le protocole ne demande que X25519 et HKDF-SHA256,
+  // tous deux natifs ici. Chaque côté garde donc son identité propre, et
+  // l'échange fonctionne entre eux.
+  //
+  // La clé privée d'identité est un CryptoKey non extractible conservé dans
+  // IndexedDB : le code de la page ne peut pas la lire, seulement s'en
+  // servir pour dériver. Contrepartie assumée — elle ne peut pas être
+  // sauvegardée ni déplacée vers un autre navigateur ; perdre les données du
+  // site, c'est perdre l'identité et son fingerprint.
+  //
+  // Les clés B/C/2 restent dérivées dans le même ordre qu'en Python (tout
+  // Clé C d'abord, puis toute Clé 2).
+
+  const SC_IDB_NAME = 'secubox-identity', SC_IDB_STORE = 'keys';
+  const SC_SESSION_INFO = 'SecuBox-Session-v2-3dh';
+  const SC_OFFER_SIZE = 64;   // 32 octets d'identité publique + 32 d'éphémère
+
+  function scIdbOpen(){
+    return new Promise((res, rej) => {
+      const r = indexedDB.open(SC_IDB_NAME, 1);
+      r.onupgradeneeded = () => r.result.createObjectStore(SC_IDB_STORE);
+      r.onsuccess = () => res(r.result);
+      r.onerror   = () => rej(r.error);
+    });
+  }
+  function scIdbTx(mode, fn){
+    return scIdbOpen().then(db => new Promise((res, rej) => {
+      const tx = db.transaction(SC_IDB_STORE, mode);
+      const rq = fn(tx.objectStore(SC_IDB_STORE));
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror   = () => rej(rq.error);
+    }));
+  }
+
+  // Identité long terme : paire X25519 dont la privée n'est pas extractible.
+  async function scLoadIdentity(){
+    try { return await scIdbTx('readonly', st => st.get('identity')); }
+    catch(e){ return null; }
+  }
+  async function scCreateIdentity(){
+    const kp = await crypto.subtle.generateKey({name:'X25519'}, false, ['deriveBits']);
+    await scIdbTx('readwrite', st => st.put(kp, 'identity'));
+    return kp;
+  }
+  async function scIdentityPub(kp){
+    return new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+  }
+  async function scFingerprintOf(pubRaw){
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', pubRaw));
+    return Array.from(h.slice(0,6)).map(b=>b.toString(16).padStart(2,'0')).join(':');
+  }
+
+  function scSplitOffer(raw){
+    if(raw.length !== SC_OFFER_SIZE)
+      throw new Error(`Offer invalide : ${raw.length} octets, ${SC_OFFER_SIZE} attendus (identité ‖ éphémère).`);
+    return [raw.slice(0,32), raw.slice(32)];
+  }
+  async function scOfferFingerprint(raw){
+    return scFingerprintOf(scSplitOffer(raw)[0]);
+  }
+
+  async function scDh(privKey, peerPubRaw){
+    const pub = await crypto.subtle.importKey('raw', peerPubRaw, {name:'X25519'}, false, []);
+    return new Uint8Array(await crypto.subtle.deriveBits({name:'X25519', public: pub}, privKey, 256));
+  }
+  function scConcat(...arrs){
+    const n = arrs.reduce((a,b)=>a+b.length, 0);
+    const out = new Uint8Array(n);
+    let o = 0;
+    for(const a of arrs){ out.set(a, o); o += a.length; }
+    return out;
+  }
+  async function scHkdf(ikm, saltStr, infoBytes, bits){
+    const k = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+    return new Uint8Array(await crypto.subtle.deriveBits(
+      {name:'HKDF', hash:'SHA-256',
+       salt: new TextEncoder().encode(saltStr), info: infoBytes}, k, bits));
+  }
   // X25519 est nativement supporté par l'API Web Crypto de ce navigateur
   // (vérifié) — pas de substitution nécessaire, contrairement à AES-256-GCM
   // pour XChaCha20-Poly1305 ailleurs sur cette page.
@@ -1187,58 +1267,50 @@
     return {keyB, keyC, key2};
   }
 
-  async function scDeriveSession(myKeyPair, myPubHex, theirPubHex, ref256, gridSize=60, blockSize=1){
-    const theirPubRaw = scHexToBytes(theirPubHex);
-    const theirPub = await crypto.subtle.importKey('raw', theirPubRaw, {name:'X25519'}, false, []);
-    const sharedBits = await crypto.subtle.deriveBits({name:'X25519', public: theirPub}, myKeyPair.privateKey, 256);
-    const shared = new Uint8Array(sharedBits);
+  // Dérivation de session — triple DH, port exact de secu_box.py::Session.derive.
+  //
+  //   DH_ee = ECDH(éphémère moi, éphémère pair)   → forward secrecy
+  //   DH_es = ECDH(éphémère moi, identité pair)   → authentifie le pair
+  //   DH_se = ECDH(identité moi, éphémère pair)   → m'authentifie auprès de lui
+  //
+  // Un relais qui substitue les clés éphémères ne possède aucune des deux
+  // identités privées : il ne peut calculer ni DH_es ni DH_se, donc pas la
+  // clé de session. L'authentification tient à la vérification hors bande du
+  // fingerprint d'identité annoncé par l'offer.
+  async function scDeriveSession(identityKp, myEphKp, theirOfferRaw, ref256, gridSize=60, blockSize=1){
+    const [theirId, theirEph] = scSplitOffer(theirOfferRaw);
+    const myId  = await scIdentityPub(identityKp);
+    const myEph = new Uint8Array(await crypto.subtle.exportKey('raw', myEphKp.publicKey));
 
-    const myPubRaw = scHexToBytes(myPubHex);
-    const [lo, hi] = scCompareBytes(myPubRaw, theirPubRaw) < 0 ? [myPubRaw, theirPubRaw] : [theirPubRaw, myPubRaw];
-    const info = new Uint8Array(lo.length+hi.length);
-    info.set(lo,0); info.set(hi,lo.length);
+    if(scCompareBytes(myId, theirId) === 0)
+      throw new Error("L'offer annonce votre propre identité : réflexion du message ou correspondant mal choisi.");
 
-    const hkdfKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
-    const kmBits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt: new TextEncoder().encode('SecuBox-Session-v1'), info}, hkdfKey, 512);
-    const km = new Uint8Array(kmBits);
+    const dhEe = await scDh(myEphKp.privateKey,     theirEph);
+    const dhEs = await scDh(myEphKp.privateKey,     theirId);
+    const dhSe = await scDh(identityKp.privateKey,  theirEph);
+
+    // Ordre canonique dérivé des deux identités publiques : chez le pair,
+    // notre DH_es est son DH_se, et l'ordre les range identiquement.
+    const avant = scCompareBytes(myId, theirId) < 0;
+    const cross = avant ? scConcat(dhEs, dhSe) : scConcat(dhSe, dhEs);
+    const ids   = avant ? scConcat(myId, theirId) : scConcat(theirId, myId);
+    const ephs  = avant ? scConcat(myEph, theirEph) : scConcat(theirEph, myEph);
+
+    // Transcript complet dans info : les quatre clés publiques sont
+    // authentifiées par la clé dérivée.
+    const km = await scHkdf(scConcat(dhEe, cross), SC_SESSION_INFO, scConcat(ids, ephs), 512);
     const stegKey = km.slice(0,32);
     const geoSeed = km.slice(32,64);
 
-    // CORRECTIF AUDIT 2026-09-10 : le session ID valait sha256(shared), un
-    // hachage du secret ECDH brut. Il est affiche et sert de prefixe aux noms
-    // de fichiers, donc il circule ; c'etait un engagement verifiable sur le
-    // secret partage — qui apprendrait « shared » plus tard pourrait confirmer
-    // qu'il correspond a une session observee. Non exploitable en soi, mais un
-    // identifiant public n'a aucune raison de deriver du secret lui-meme
-    // plutot que du materiel HKDF, sous un libelle qui lui est propre. Meme
-    // correction que du cote Python (secu_box.py).
-    const sidBits = await crypto.subtle.deriveBits(
-      {name:'HKDF', hash:'SHA-256',
-       salt: new TextEncoder().encode('SecuBox-Session-v1'),
-       info: new TextEncoder().encode('session-id')},
-      await crypto.subtle.importKey('raw', km, 'HKDF', false, ['deriveBits']), 64);
-    const sessionId = scBytesToHex(new Uint8Array(sidBits));
-
-    // Chaine d'authentification comparee de vive voix (SAS). CORRECTIF AUDIT
-    // 2026-09-10 : elle valait 48 bits, derives du session ID. Un relais actif
-    // controle ses deux clés éphémères et peut donc les tirer jusqu'a ce que
-    // les deux sessions affichent la MEME empreinte : un paradoxe des
-    // anniversaires sur 48 bits, soit environ 2 x 2^24 echanges X25519 —
-    // mesure a une heure en Python mono-coeur, quelques minutes avec une
-    // implementation optimisee. La comparaison hors bande ne detectait donc
-    // pas un adversaire determine. Portee a 128 bits (2^64 par recherche
-    // d'anniversaire, hors de portee) et derivee du materiel HKDF plutot que
-    // du session ID, qui est lui-meme publie.
-    const sasBits = await crypto.subtle.deriveBits(
-      {name:'HKDF', hash:'SHA-256',
-       salt: new TextEncoder().encode('SecuBox-Session-v1'),
-       info: new TextEncoder().encode('session-auth-string')},
-      await crypto.subtle.importKey('raw', km, 'HKDF', false, ['deriveBits']), 128);
-    const authString = Array.from(new Uint8Array(sasBits))
+    // Dérivés du matériel HKDF, sous des libellés propres — jamais du secret
+    // ECDH brut, qui ne doit pas se retrouver engagé dans une valeur publiée.
+    const sessionId  = scBytesToHex(await scHkdf(km, SC_SESSION_INFO, new TextEncoder().encode('session-id'), 64));
+    const authString = Array.from(await scHkdf(km, SC_SESSION_INFO, new TextEncoder().encode('session-auth-string'), 128))
       .map(b=>b.toString(16).padStart(2,'0')).join(':');
 
     const geoKeys = await scDeriveGeoKeys(geoSeed, ref256.length, gridSize, blockSize);
-    return { stegKeyHex: scBytesToHex(stegKey), keyB: geoKeys.keyB, keyC: geoKeys.keyC, key2: geoKeys.key2, sessionId, authString, gridSize };
+    return { stegKeyHex: scBytesToHex(stegKey), keyB: geoKeys.keyB, keyC: geoKeys.keyC,
+             key2: geoKeys.key2, sessionId, authString, gridSize };
   }
 
   const SC_SESSION_KEY = 'secubox_session_v1';
@@ -1307,10 +1379,47 @@
     }
   }
 
+  let scIdentity = null;
+
+  async function scEnsureIdentity(){
+    if(scIdentity) return scIdentity;
+    scIdentity = await scLoadIdentity();
+    return scIdentity;
+  }
+
+  async function scRefreshIdentityUI(){
+    const box = document.getElementById('sc-identity-box');
+    const btn = document.getElementById('btnScCreateIdentity');
+    const kp  = await scEnsureIdentity();
+    if(!kp){
+      box.innerHTML = "Aucune identité sur ce navigateur. En créer une avant tout échange : c'est elle qui authentifie vos sessions.";
+      btn.hidden = false;
+      return null;
+    }
+    const pub = await scIdentityPub(kp);
+    box.innerHTML = `Fingerprint de votre identité : <b>${await scFingerprintOf(pub)}</b><br>`
+      + `Clé publique : <span style="word-break:break-all">${scBytesToHex(pub)}</span><br>`
+      + `Le donner à vos correspondants par un canal sûr — c'est ce qu'ils confronteront à l'offer que vous leur enverrez.`;
+    btn.hidden = true;
+    return kp;
+  }
+
+  async function onScCreateIdentity(){
+    if(await scEnsureIdentity()) return;
+    scIdentity = await scCreateIdentity();
+    await scRefreshIdentityUI();
+  }
+
   async function onScGenerate(){
+    const idKp = await scRefreshIdentityUI();
+    if(!idKp){
+      document.getElementById('sc-my-key').hidden = true;
+      return;
+    }
     const kp = await scGenerateEphemeralKeyPair();
     scEphemeralKeyPair = kp.keyPair;
-    scMyPubHex = kp.publicHex;
+    const offer = scConcat(await scIdentityPub(idKp), scHexToBytes(kp.publicHex));
+    scMyPubHex = scBytesToHex(offer);
     document.getElementById('sc-my-key').hidden = false;
     document.getElementById('sc-my-pub').value = scMyPubHex;
   }
@@ -1324,14 +1433,27 @@
     const resultEl = document.getElementById('sc-session-info');
     const resultBox = document.getElementById('sc-session-result');
     if(!REF256) return;
-    if(!scEphemeralKeyPair){ resultBox.hidden=false; resultEl.textContent = 'Génère ta clé éphémère (étape 1) avant de dériver.'; return; }
-    const theirPubHex = document.getElementById('sc-their-pub').value.trim().toLowerCase();
-    if(!/^[0-9a-f]{64}$/.test(theirPubHex)){ resultBox.hidden=false; resultEl.textContent = 'Clé publique invalide (64 caractères hex attendus).'; return; }
+    const idKp = await scEnsureIdentity();
+    if(!idKp){ resultBox.hidden=false; resultEl.textContent = "Créez d'abord votre identité (étape 0)."; return; }
+    if(!scEphemeralKeyPair){ resultBox.hidden=false; resultEl.textContent = 'Générez votre offer (étape 1) avant de dériver.'; return; }
+    const theirOfferHex = document.getElementById('sc-their-pub').value.trim().toLowerCase();
+    if(!/^[0-9a-f]{128}$/.test(theirOfferHex)){ resultBox.hidden=false; resultEl.textContent = "Offer invalide : 128 caractères hexadécimaux attendus (identité ‖ éphémère)."; return; }
     try{
-      const session = await scDeriveSession(scEphemeralKeyPair, scMyPubHex, theirPubHex, REF256, 60, 1);
+      const theirOffer = scHexToBytes(theirOfferHex);
+      const fp = await scOfferFingerprint(theirOffer);
+      if(!confirm(`L'offer annonce le fingerprint :\n\n${fp}\n\nConfrontez-le à celui que votre correspondant vous a donné par un autre canal. S'ils diffèrent, quelqu'un s'interpose.\n\nCorrespond-il ?`)){
+        resultBox.hidden = false;
+        resultEl.textContent = 'Échange interrompu — session non dérivée.';
+        return;
+      }
+      const session = await scDeriveSession(idKp, scEphemeralKeyPair, theirOffer, REF256, 60, 1);
       scSaveSession(session);
       resultBox.hidden = false;
-      resultEl.innerHTML = `Session dérivée ✓<br>Session ID : <b>${session.sessionId}</b><br>Chaîne d'authentification :<br><b style="word-break:break-all">${session.authString}</b><br>À lire à voix haute avec votre correspondant : si vos deux chaînes diffèrent, quelqu'un s'interpose. Ne pas échanger de message sensible avant cette vérification.<br>Forward secrecy : clé éphémère détruite ✓`;
+      resultEl.innerHTML = `Session dérivée ✓<br>Session ID : <b>${session.sessionId}</b><br>`
+        + `Authentifiée par triple DH — l'identité <b>${fp}</b> est liée à cette session.<br>`
+        + `Chaîne d'authentification (secours, si le fingerprint n'a pas pu être vérifié avant) :<br>`
+        + `<b style="word-break:break-all">${session.authString}</b><br>`
+        + `Forward secrecy : clé éphémère détruite ✓`;
       scEphemeralKeyPair = null; scMyPubHex = null;
       document.getElementById('sc-my-key').hidden = true;
       scRefreshActiveSessionUI();
@@ -2272,6 +2394,8 @@
       document.getElementById('disk-decrypt-info').textContent = f ? (f.name + ' — ' + f.size.toLocaleString('fr-FR') + ' octets') : '';
     });
 
+    document.getElementById('btnScCreateIdentity').addEventListener('click', onScCreateIdentity);
+    scRefreshIdentityUI();
     document.getElementById('btnScGenerate').addEventListener('click', onScGenerate);
     document.getElementById('btnScCopyPub').addEventListener('click', onScCopyPub);
     document.getElementById('btnScDerive').addEventListener('click', onScDerive);
