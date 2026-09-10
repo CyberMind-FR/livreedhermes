@@ -32,7 +32,7 @@ from cryptography.hazmat.primitives import hashes as _h
 from stegano_lib import (
     load_referents, ALPHA_LEN,
     apply_orientation, _encrypt, _decrypt,
-    payload_to_symbols, symbols_needed, max_message_for
+    payload_to_symbols, max_message_for
 )
 
 GRID_SIZE   = 90
@@ -88,20 +88,6 @@ def derive_grammar(master_key: bytes, ref256: List[Dict]) -> List[Dict]:
         })
     return grammar
 
-def grammar_stats(grammar: List[Dict]) -> Dict:
-    roles = [g['role'] for g in grammar]
-    return {
-        'pure':       roles.count(PURE),
-        'structured': roles.count(STRUCTURED),
-        'message':    roles.count(MESSAGE),
-        'msg_positions': roles.count(MESSAGE) * 6,
-        'msg_chars':     max_message_for(roles.count(MESSAGE) * 6),
-        # Noms d'avant conservés : le flux n'est plus en nibbles, mais des
-        # appelants externes peuvent encore les lire.
-        'msg_nibbles':   roles.count(MESSAGE) * 6,
-        'msg_bytes':     max_message_for(roles.count(MESSAGE) * 6),
-    }
-
 # ── Positions d'un bloc selon sa grammaire ────────────────────────────────────
 def block_positions(br: int, bc: int, g: Dict, ref256: List[Dict]) -> List[Tuple]:
     """Retourne les 6 positions de lecture du bloc (br, bc) selon g."""
@@ -111,6 +97,30 @@ def block_positions(br: int, bc: int, g: Dict, ref256: List[Dict]) -> List[Tuple
     r0, c0 = br * BLOCK_SIZE, bc * BLOCK_SIZE
     return [(r0+r, c0+c) for r, c in t
             if 0 <= r0+r < GRID_SIZE and 0 <= c0+c < GRID_SIZE]
+
+def grammar_stats(grammar: List[Dict], ref256: List[Dict]) -> Dict:
+    """
+    Statistiques de la grammaire, capacité comprise.
+
+    'msg_positions' est compté sur la géométrie réellement rendue par les
+    blocs message, et non supposé égal à 6 par bloc : c'est cette valeur que
+    parcourt la boucle d'écriture d'encode_carter().
+
+    Les clés 'msg_nibbles' et 'msg_bytes' ont disparu. Le flux n'est plus en
+    nibbles, et 'msg_bytes' en était venu à porter un nombre de caractères
+    sous un nom qui annonçait des octets — un appelant non mis à jour lisait
+    silencieusement une autre grandeur.
+    """
+    roles = [g['role'] for g in grammar]
+    n_pos = sum(len(block_positions(i // BLOCKS_SIDE, i % BLOCKS_SIDE, g, ref256))
+                for i, g in enumerate(grammar) if g['role'] == MESSAGE)
+    return {
+        'pure':       roles.count(PURE),
+        'structured': roles.count(STRUCTURED),
+        'message':    roles.count(MESSAGE),
+        'msg_positions': n_pos,
+        'msg_chars':     max_message_for(n_pos),
+    }
 
 # ── Encodage Carter ────────────────────────────────────────────────────────────
 def encode_carter(
@@ -127,7 +137,7 @@ def encode_carter(
     4. Blocs 'message'    : forme ansée → écrire les nibbles du message chiffré
     """
     grammar = derive_grammar(master_key, ref256)
-    stats   = grammar_stats(grammar)
+    stats   = grammar_stats(grammar, ref256)
 
     # Vérifier la capacité
     payload  = _encrypt(message, master_key)
@@ -140,7 +150,7 @@ def encode_carter(
         raise ValueError(
             f"Message trop long : {len(message)} caractères > "
             f"{stats['msg_chars']} disponibles "
-            f"({stats['message']} blocs message × 6 positions)")
+            f"({stats['message']} blocs message, {stats['msg_positions']} positions)")
 
     # Grille de bruit
     grid = [[secrets.randbelow(ALPHA_LEN) for _ in range(GRID_SIZE)]
@@ -205,14 +215,14 @@ def demo():
 
     # Grammaire
     grammar = derive_grammar(master_key, ref256)
-    stats   = grammar_stats(grammar)
+    stats   = grammar_stats(grammar, ref256)
     view    = steganalysis_view(grammar)
 
     print("Grammaire dérivée de la clé (225 blocs) :")
     print(f"  Blocs purs        : {stats['pure']:3d}  ({stats['pure']/N_BLOCKS*100:.0f}%)")
     print(f"  Blocs structurés  : {stats['structured']:3d}  ({stats['structured']/N_BLOCKS*100:.0f}%)")
     print(f"  Blocs message     : {stats['message']:3d}  ({stats['message']/N_BLOCKS*100:.0f}%)")
-    print(f"  Capacité message  : {stats['msg_bytes']} bytes = {stats['msg_bytes']-44} chars utiles")
+    print(f"  Capacité message  : {stats['msg_positions']} positions = {stats['msg_chars']} chars utiles")
     print()
     print("Vue d'un analyste sans clé :")
     print(f"  Blocs géométriquement structurés visibles : {view['blocs_visibles']}")
