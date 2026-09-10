@@ -1,78 +1,162 @@
-# Anibal Amiot — Webapp
+# La Livrée d'Hermès — site d'Anibal Amiot
 
-Vitrine du travail d'Anibal Amiot (motifs textiles, tirages, impressions) — webapp HTML/JS légère, pensée pour être servie telle quelle sur GitHub Pages avec un nom de domaine personnalisé (anibal-amiot.com).
+Site de **La Livrée d'Hermès**, le travail d'Anibal Edelberto Amiot autour du
+Yi King, des motifs textiles génératifs et de la stéganographie géométrique.
+Site statique servi tel quel — pas d'étape de compilation, pas de framework :
+chaque page est un fichier HTML autonome que l'on peut ouvrir depuis le disque.
 
-## Structure du projet
+Les pages lourdes (galerie des 884 motifs, encodeur, impression) embarquent leur
+JavaScript en ligne. Ce qui est partagé entre plusieurs pages vit dans
+`assets/*.js` et se charge par une balise `<script src>`.
+
+## Ce que contient le dépôt
 
 ```
 /
-├── index.html       → structure de la page (en-tête, nav, zone de contenu)
-├── style.css         → design (tokens couleur/typo, layout)
-├── app.js            → moteur : lit content.json, gère la navigation par boutons
-├── content.json       → TOUT le texte du site (titres, intros, meta SEO)
-└── assets/
-    └── logo-caducee.gif  → logo animé (caducée)
+├── index.html                       tirage Yi King (page d'accueil)
+├── tirage-livree-hermes.html        tirage et numérotation binaire
+├── creation-motifs-yi-king.html     création de motifs
+├── impression.html                  impression 360
+├── galerie-884-patterns-unifies.html galerie des 884 motifs unifiés
+├── unified-patterns.html            présentation des motifs unifiés
+├── fonds-ecran.html                 fonds d'écran
+├── articles.html + articles/        six articles de fond
+├── hexagrammes/                     index + 64 pages, une par hexagramme (générées)
+├── lexique.html, a-propos.html, profil.html, contact.html
+├── pro.html, pro-contenu.html, pro-succes.html    palier Pro (99 €)
+├── soutien-succes.html              retour de paiement du soutien
+├── encodeur.html                    SecuBox : stéganographie et chiffrement
+├── book-viewer/                     liseuse du livre + PDF (fr, en, es, th)
+├── fr/livre/, en/book/, es/libro/, th/book/       pages de vente du livre
+├── assets/                          images, motifs, JS partagé (~7 700 fichiers)
+├── data/                            référents géométriques 256 et 360
+├── scripts/                         génération hors ligne (Node)
+├── worker/                          backend Cloudflare Worker (Stripe)
+├── stegano/, secubox/, disk/        implémentations Python de SecuBox
+└── sitemap.xml, robots.txt, .htaccess
 ```
 
-## Comment ça marche
+`motifs (4).html` et `pages.html` ne sont que des redirections conservées pour
+les anciens liens.
 
-C'est une **single-page app** avec routage par ancre (`#id`) :
-- `index.html` charge `app.js`, qui lit `content.json` au démarrage.
-- Chaque page/bouton (accueil, tirage livrée, création de motifs, impression 360, projets, contact) est une entrée dans `content.json`, sous `pages`.
-- La navigation (`nav` dans `content.json`) génère automatiquement les boutons en haut de page.
-- Cliquer un bouton change l'URL (`#tirage-livree`, etc.) sans recharger la page ; `app.js` réagit à ce changement et affiche le bon contenu.
+`app.js` et `content.json`, à la racine, sont les vestiges d'une ancienne
+version du site pilotée par un moteur de contenu JSON. **Aucun fichier HTML ne
+les référence** — ils ne sont ni chargés ni lus, et modifier `content.json` n'a
+aucun effet sur le site.
 
-**Conséquence pratique : pour modifier un texte, il ne faut pas toucher au code**, juste éditer `content.json`. Voir plus bas.
+## JavaScript partagé (`assets/`)
 
-## Modifier le contenu (texte, SEO)
+| Fichier | Rôle |
+|---|---|
+| `calque-engine.js` | moteur de composition des motifs : reconstruit la grille de calques pour chaque nature de trait (Yang, Yang mutant, Yin, Yin mutant) |
+| `articles-data.js` | source unique des métadonnées d'articles, lue par `articles.html` et par chaque page d'article |
+| `soutien-gate.js` | soutien à prix libre — verrouille les téléchargements SVG et PDF |
+| `pro-gate.js` | palier Pro à prix fixe, jeton distinct de celui du soutien |
+| `share-widget.js` | bloc « Partager cette page » |
 
-Ouvrir `content.json`. Chaque page a cette forme :
+Les deux paliers sont indépendants : posséder l'un ne donne pas accès à l'autre.
+Les jetons vivent sous deux clés `localStorage` distinctes (`soutien_token`,
+`pro_token`) et sont vérifiés auprès du Worker.
 
-```json
-"tirage-livree": {
-  "metaTitle": "Tirage livrée — Anibal Amiot",
-  "metaDescription": "Commande et suivi de tirages livrés à l'adresse du client.",
-  "eyebrow": "Bouton 1",
-  "title": "Tirage livrée",
-  "intro": "Texte affiché sous le titre."
-}
-```
+## Modifier le contenu
 
-- `metaTitle` / `metaDescription` → balises SEO de la page (title + meta description).
-- `eyebrow` → petit label au-dessus du titre.
-- `title` → titre principal (H1).
-- `intro` → paragraphe d'introduction. Actuellement, plusieurs pages ont un texte `"REMPLACER : ..."` — c'est un espace réservé, à remplacer par le contenu réel de chaque bouton au fur et à mesure qu'Anibal le valide.
+Le texte est **dans les pages HTML**. Pour changer un paragraphe, éditer le
+fichier de la page concernée.
 
-Pas besoin de toucher `app.js` ou `index.html` pour ces changements.
+Deux exceptions, où il ne faut pas toucher au HTML :
 
-## Ajouter une page/bouton
+- **Métadonnées d'articles** (titre, catégorie, date, ordre) →
+  `assets/articles-data.js`. La grille de `articles.html` et la navigation
+  précédent/suivant de chaque article en découlent.
+- **Pages d'hexagrammes** → elles sont générées, voir ci-dessous. Une
+  modification faite à la main dans `hexagrammes/` sera écrasée à la
+  prochaine génération.
 
-1. Dans `content.json`, ajouter une entrée dans `nav` (id + label du bouton).
-2. Ajouter l'entrée correspondante dans `pages` avec le même `id`.
-3. Rien d'autre à faire — le bouton et la page apparaissent automatiquement.
+## Génération hors ligne (`scripts/`)
 
-## Logo
+Ces scripts ne tournent **pas** dans le navigateur : ils produisent des fichiers
+que l'on commite ensuite. `cd scripts && npm install` avant la première
+utilisation (dépendances : `@napi-rs/canvas`, `pdfkit`, `archiver`).
 
-Le logo actuel (`assets/logo-caducee.gif`) est un GIF animé en boucle (4 variantes du caducée). Si une occurrence de l'ancien logo traîne encore ailleurs dans le code (autre page ou export du site précédent), chercher les références à l'ancien fichier et les remplacer par `assets/logo-caducee.gif`.
+| Script | Produit |
+|---|---|
+| `extract-hexagram-data.js` | extrait les tables d'hexagrammes depuis `index.html` |
+| `generate-hexagram-assets.js` | un PNG de carré/pavage par hexagramme → `assets/hexagrammes/` |
+| `generate-hexagram-pages.js` | les 64 pages `hexagrammes/<n>-<pinyin>-<nom>.html` |
+| `export-galerie-884.js` | SVG + JPEG Pinterest + métadonnées + archive ZIP |
+| `export-galerie-884-hires.js` | PNG 4096×4096 (Pinterest, Adobe Stock) |
+| `export-galerie-884-pinterest.js` | PNG au format Pinterest, pour publication programmée |
+| `export-galerie-884-vector.js` | 884 SVG par catégorie (cellules/pavages × tricolore/monochrome) |
+| `generate-sitemap.js` | `sitemap.xml` |
 
-## Déploiement (GitHub Pages + domaine OVH)
+La chaîne des hexagrammes s'exécute dans l'ordre du tableau : les données
+d'abord, puis les images, puis les pages qui les référencent.
 
-1. Pousser ces fichiers à la racine du repo (branche par défaut, ex. `main`).
-2. Dans les réglages du repo GitHub → **Pages** → activer GitHub Pages sur la branche `main`, dossier racine `/`.
-3. Toujours dans **Pages**, section **Custom domain**, renseigner `anibal-amiot.com`.
-4. Côté OVH, sur la zone DNS du domaine, ajouter les enregistrements pointant vers GitHub Pages (4 enregistrements A vers les IP GitHub Pages, + éventuellement un CNAME pour `www`). Voir la doc officielle GitHub : `docs.github.com/pages/configuring-a-custom-domain-for-your-github-pages-site`.
-5. Configurer les redirections des domaines secondaires (`.fr`, `.net`) vers `.com` côté OVH, pour éviter le contenu dupliqué.
+## Sitemap
 
-## Sitemap (sitemap.xml)
+`sitemap.xml` n'est pas maintenu à la main. `scripts/generate-sitemap.js` liste
+automatiquement `articles/` et `hexagrammes/`, y ajoute les pages fixes
+déclarées dans `STATIC_PAGES` en tête du script, et calcule chaque `<lastmod>`
+depuis la date du dernier commit Git du fichier.
 
-`sitemap.xml` n'est pas maintenu à la main : il est généré par `scripts/generate-sitemap.js`, qui liste automatiquement tous les fichiers de `articles/` et `hexagrammes/` (plus les pages fixes déclarées en haut du script) et calcule `<lastmod>` depuis la date du dernier commit Git de chaque fichier.
+- **Automatique** : `.github/workflows/update-sitemap.yml` relance le script à
+  chaque push sur `main` et recommite `sitemap.xml` s'il a changé.
+- **Manuel** : `node scripts/generate-sitemap.js` depuis la racine.
+- Une page qui n'est ni un article ni un hexagramme doit être ajoutée à
+  `STATIC_PAGES` pour apparaître.
 
-- **Automatique** : `.github/workflows/update-sitemap.yml` relance ce script à chaque push sur `main` et recommite `sitemap.xml` s'il a changé — rien à faire après avoir publié un nouvel article ou une nouvelle page d'hexagramme.
-- **Manuel** (si besoin de vérifier avant de pousser, ou si les Actions GitHub sont désactivées) : `node scripts/generate-sitemap.js` depuis la racine du dépôt, puis committer `sitemap.xml`.
-- Pour ajouter une page qui n'est ni un article ni un hexagramme (ex. une nouvelle page d'outil), l'ajouter à la liste `STATIC_PAGES` en haut du script.
+`sitemap-pdf.xml` est en revanche maintenu à la main.
 
-## À venir
+## Backend (`worker/`)
 
-- Contenu réel des pages "tirage livrée", "création de motifs", "impression 360", "projets & fonds d'écran", "contact" (actuellement en placeholder `REMPLACER`).
-- Version anglaise du contenu (prévue pour le démarchage institutionnel en Thaïlande).
-- Images/visuels dans `assets/` (actuellement seul le logo y figure).
+Cloudflare Worker qui gère les paiements Stripe des deux paliers et délivre les
+jetons d'accès. Le site statique n'est pas modifié par ce Worker : il est
+seulement appelé en `fetch()` depuis le navigateur, à
+`livreedhermes-soutien.anibalamiot.workers.dev`.
+
+Voir `worker/README.md` pour la mise en place (Stripe, KV, `wrangler deploy`).
+
+## SecuBox — stéganographie et chiffrement
+
+Deux implémentations parallèles, l'une en Python et l'autre en JavaScript, de
+constructions géométriques originales (référents 256 et 360 dans `data/`) :
+
+| Emplacement | Contenu |
+|---|---|
+| `stegano/stegano_lib.py` | dissimulation géométrique, grilles Carter 256 / 360 / Mix |
+| `stegano/carter.py`, `stegano/grid_90.py` | grille Carter autonome, grille 90×90 à trois niveaux |
+| `secubox/secu_box.py` | identités X25519, échange de clés authentifié, déni plausible |
+| `secubox/vault_lib.py` | vault de fichiers chiffré (Argon2id + XChaCha20-Poly1305) |
+| `secubox/secu_box_cli.py` | CLI `secu-box` |
+| `disk/disk_lib.py` | chiffrement de fichiers (diversification géométrique + ChaCha20-Poly1305) |
+| `encodeur.html` | portage navigateur (Web Crypto) |
+
+Dépendances Python : `cryptography`, `argon2-cffi`.
+
+**Les deux implémentations ne sont pas interchangeables.** Le navigateur ne
+dispose ni d'Argon2id ni de XChaCha20-Poly1305 en natif ; `encodeur.html` leur
+substitue PBKDF2 et AES-256-GCM, et son échange de clés est authentifié par
+comparaison hors bande d'une chaîne de 128 bits, là où la CLI Python lie les
+identités long terme à la session par un triple DH. Les sessions dérivées de
+part et d'autre ne se correspondent pas. Pour un usage sensible, préférer la
+CLI Python. L'onglet « À propos » de `encodeur.html` détaille chaque écart.
+
+La couche cryptographique repose sur des primitives standard ; la couche
+géométrique est **en cours d'évaluation formelle** et n'est pas revendiquée
+comme un chiffrement autonome. Un audit cryptologique a été mené le 2026-09-10
+(voir l'historique Git).
+
+## Déploiement
+
+Site statique servi depuis la racine du dépôt, sur `anibal-amiot.com`.
+
+`.htaccess` prend en charge la redirection HTTPS et les redirections des
+anciennes URL — il n'est lu que par Apache, et resterait sans effet sur un
+hébergement qui l'ignore (GitHub Pages, par exemple). Le dépôt ne contient pas
+de fichier `CNAME`.
+
+## Licences
+
+Double licence : AGPL v3 pour l'usage non commercial (`LICENSE`), licence
+commerciale sur demande (`LICENSE-COMMERCIAL`). Voir `NOTICE` pour les
+attributions et le brevet FR2865054.
