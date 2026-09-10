@@ -4,11 +4,14 @@
 SecuBox — Protocole de communication sécurisée
 La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
 
-1. Échange de clés  : X25519 ECDH éphémère + HKDF-SHA256 (info canonique)
-2. Forward secrecy  : clé éphémère détruite après derive()
-3. Déni plausible   : 2 messages dans 2 zones non-chevauchantes d'une grille
-4. Chiffrement      : XChaCha20-Poly1305 (stegano_lib.py)
-5. Dissimulation    : géométrie La Livrée d'Hermès
+1. Échange de clés  : X25519 triple DH (éphémère×éphémère, éphémère×identité,
+                      identité×éphémère) + HKDF-SHA256 sur le transcript
+2. Authentification : l'identité long-terme entre dans la dérivation ; le
+                      fingerprint vérifié hors bande écarte un relais actif
+3. Forward secrecy  : clé éphémère détruite après derive()
+4. Déni plausible   : 2 messages dans 2 zones non-chevauchantes d'une grille
+5. Chiffrement      : XChaCha20-Poly1305 (stegano_lib.py)
+6. Dissimulation    : géométrie La Livrée d'Hermès
 
 Zones déni plausible (grille 60×60 = 100 blocs 6×6) :
   Zone A (real)   : blocs zigzag 0..49
@@ -83,42 +86,170 @@ class Identity:
         return cls(raw)
 
 
-# ── Session ECDH éphémère ─────────────────────────────────────────────────────
+# ── Session : échange authentifié X25519 (triple DH) ──────────────────────────
+#
+# CORRECTIF AUDIT 2026-09-10 : la version précédente était un ECDH
+# éphémère-éphémère nu. La classe Identity existait, était protégée par
+# passphrase, exposait un fingerprint que la CLI invitait à vérifier « par un
+# canal sûr » — et n'entrait dans aucun calcul. N'importe quel relais pouvait
+# substituer ses propres clés éphémères et partager une clé avec chacun des
+# deux correspondants sans qu'ils s'en aperçoivent : le fingerprint vérifié
+# ne protégeait rien.
+#
+# La session dérive désormais de trois Diffie-Hellman, à la manière de X3DH :
+#
+#   DH_ee = ECDH(éphémère_moi,  éphémère_pair)   → forward secrecy
+#   DH_es = ECDH(éphémère_moi,  identité_pair)   → authentifie le pair
+#   DH_se = ECDH(identité_moi,  éphémère_pair)   → m'authentifie auprès de lui
+#
+# Un attaquant qui substitue les clés éphémères ne possède aucune des deux
+# clés d'identité privées : il ne peut calculer ni DH_es ni DH_se, donc pas
+# la clé de session. L'authentification repose sur la vérification du
+# fingerprint d'identité hors bande — laquelle a maintenant un effet réel.
+#
+# Aucune primitive nouvelle : X25519 seul, comme avant.
+
+_SESSION_INFO = b'SecuBox-Session-v2-3dh'
+
+def _dh(priv: X25519PrivateKey, peer_public: bytes) -> bytes:
+    """ECDH X25519. La bibliothèque rejette déjà les points d'ordre faible."""
+    return priv.exchange(X25519PublicKey.from_public_bytes(peer_public))
+
 class Session:
     """
-    Session éphémère X25519 avec forward secrecy.
+    Session X25519 authentifiée, à forward secrecy.
 
-      sa = Session(ref256)
-      sb = Session(ref256)
-      ka = sa.derive(sb.public_bytes)   # clé dérivée par Alice
-      kb = sb.derive(sa.public_bytes)   # clé dérivée par Bob
+      alice = Identity(); bob = Identity()
+      sa = Session(ref256, alice)
+      sb = Session(ref256, bob)
+      offer_a, offer_b = sa.offer(), sb.offer()     # échangés sur le réseau
+      ka = sa.derive(offer_b)
+      kb = sb.derive(offer_a)
       assert ka['steg_key'] == kb['steg_key']
-      # Clés éphémères privées détruites — forward secrecy garantie.
+
+    Une offer transporte (identité publique ‖ éphémère publique), soit 64
+    octets. Elle n'est pas secrète, mais l'identité qu'elle annonce DOIT
+    être vérifiée hors bande via son fingerprint : c'est elle qui distingue
+    le correspondant d'un relais. peer_fingerprint() la donne sous la même
+    forme que Identity.fingerprint().
+
+    La clé éphémère privée est détruite après derive(), et une Session ne
+    peut servir qu'une fois.
     """
 
-    def __init__(self, ref256: List[Dict]):
-        self._eph    = X25519PrivateKey.generate()
-        self._ref256 = ref256
-        self._done   = False
+    OFFER_SIZE = 64   # 32 octets d'identité publique + 32 d'éphémère publique
+
+    def __init__(self, ref256: List[Dict], identity: 'Identity'):
+        if not isinstance(identity, Identity):
+            raise TypeError(
+                "Session exige une Identity : c'est elle qui authentifie "
+                "l'échange. Créer ou charger une identité au préalable.")
+        self._identity = identity
+        self._eph      = X25519PrivateKey.generate()
+        self._eph_pub  = self._eph.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        self._ref256   = ref256
+        self._done     = False
 
     @property
     def public_bytes(self) -> bytes:
-        return self._eph.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        """Clé éphémère publique seule. Pour le réseau, préférer offer()."""
+        return self._eph_pub
 
-    def derive(self, their_public: bytes,
+    def offer(self) -> bytes:
+        """Ce qui est transmis au correspondant : identité ‖ éphémère."""
+        return self._identity.public_bytes + self._eph_pub
+
+    @staticmethod
+    def split_offer(offer: bytes) -> Tuple[bytes, bytes]:
+        """(identité publique, éphémère publique) — valide la taille."""
+        if len(offer) != Session.OFFER_SIZE:
+            raise ValueError(
+                f"Offer invalide : {len(offer)} octets, "
+                f"{Session.OFFER_SIZE} attendus (identité ‖ éphémère).")
+        return offer[:32], offer[32:]
+
+    @staticmethod
+    def peer_fingerprint(offer: bytes) -> str:
+        """Fingerprint de l'identité annoncée — à confronter hors bande."""
+        peer_id, _ = Session.split_offer(offer)
+        return ':'.join(f'{b:02x}'
+                        for b in hashlib.sha256(peer_id).digest()[:6])
+
+    # ── Reprise entre deux invocations ────────────────────────────────────
+    # Une CLI ne peut pas garder la Session en mémoire entre le moment où
+    # elle publie son offer et celui où elle reçoit celle du correspondant.
+    # La clé éphémère privée doit donc survivre sur disque dans l'intervalle,
+    # ce qui ouvre une fenêtre pendant laquelle la forward secrecy dépend de
+    # ce fichier. Elle est chiffrée sous une clé dérivée de l'identité — un
+    # vol du seul fichier d'attente ne donne rien — et doit être détruite dès
+    # la session dérivée.
+
+    def _pending_key(self) -> bytes:
+        return _HKDF2(_hashes2.SHA256(), 32, salt=b'SecuBox-Pending-v1',
+                      info=b'ephemeral-at-rest').derive(
+            self._identity._priv.private_bytes(
+                serialization.Encoding.Raw,
+                serialization.PrivateFormat.Raw,
+                serialization.NoEncryption()))
+
+    def export_pending(self) -> bytes:
+        """Éphémère privée chiffrée sous l'identité, pour reprise ultérieure."""
+        raw = self._eph.private_bytes(
+            serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+            serialization.NoEncryption())
+        return _xchacha_enc2(self._pending_key(), raw, b'SecuBox-Pending-v1')
+
+    @classmethod
+    def resume(cls, ref256: List[Dict], identity: 'Identity',
+               pending: bytes) -> 'Session':
+        """Reconstruit la Session qui a produit ce pending, même éphémère."""
+        self = cls(ref256, identity)
+        raw  = _xchacha_dec2(self._pending_key(), pending, b'SecuBox-Pending-v1')
+        self._eph     = X25519PrivateKey.from_private_bytes(raw)
+        self._eph_pub = self._eph.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        return self
+
+    def derive(self, their_offer: bytes,
                grid_size: int = 60, block_size: int = 1) -> Dict:
         if self._done:
             raise ValueError("Session consommée. Créer une nouvelle Session().")
-        their_pub_obj = X25519PublicKey.from_public_bytes(their_public)
-        shared        = self._eph.exchange(their_pub_obj)
-        my_pub        = self.public_bytes
-        lo, hi        = ((my_pub, their_public) if my_pub < their_public
-                         else (their_public, my_pub))
-        km = HKDF(hashes.SHA256(), 64, b'SecuBox-Session-v1',
-                   lo + hi).derive(shared)
-        session_id = hashlib.sha256(shared).hexdigest()[:16]
-        del self._eph, shared
+        their_id, their_eph = Session.split_offer(their_offer)
+        my_id = self._identity.public_bytes
+
+        if their_id == my_id:
+            raise ValueError(
+                "L'offer annonce notre propre identité : réflexion du message "
+                "ou correspondant mal choisi.")
+
+        dh_ee = _dh(self._eph, their_eph)
+        dh_es = _dh(self._eph, their_id)              # éphémère moi × identité pair
+        dh_se = _dh(self._identity._priv, their_eph)  # identité moi × éphémère pair
+
+        # Les deux DH croisés se correspondent en miroir : chez le pair,
+        # notre dh_es est son dh_se. Un ordre canonique, dérivé des deux
+        # identités publiques, les range identiquement des deux côtés.
+        if my_id < their_id:
+            cross = dh_es + dh_se
+            ids   = my_id + their_id
+            ephs  = self._eph_pub + their_eph
+        else:
+            cross = dh_se + dh_es
+            ids   = their_id + my_id
+            ephs  = their_eph + self._eph_pub
+
+        # Le transcript complet entre dans info : les quatre clés publiques
+        # sont ainsi authentifiées par la clé dérivée.
+        km = HKDF(hashes.SHA256(), 64, _SESSION_INFO,
+                  ids + ephs).derive(dh_ee + cross)
+
+        # session_id dérivé du matériel HKDF et non du secret ECDH brut,
+        # pour ne pas publier d'engagement vérifiable sur ce dernier.
+        session_id = HKDF(hashes.SHA256(), 8, _SESSION_INFO,
+                          b'session-id').derive(km).hex()
+
+        del self._eph, dh_ee, dh_es, dh_se, cross
         self._done = True
         return _km_to_keys(km, self._ref256, session_id, grid_size, block_size)
 
@@ -244,23 +375,45 @@ def demo():
     print(f"   Alice : {alice.fingerprint()}")
     print(f"   Bob   : {bob.fingerprint()}")
 
-    print("\n2. ÉCHANGE DE CLÉS X25519 (éphémère)\n")
-    sa = Session(ref256); sb = Session(ref256)
-    pub_sa = sa.public_bytes
-    pub_sb = sb.public_bytes
-    ka = sa.derive(pub_sb)
-    kb = sb.derive(pub_sa)
+    print("\n2. ÉCHANGE DE CLÉS X25519 AUTHENTIFIÉ (triple DH)\n")
+    sa = Session(ref256, alice); sb = Session(ref256, bob)
+    offer_a, offer_b = sa.offer(), sb.offer()
+    print(f"   Offer d'Alice : {len(offer_a)} octets "
+          f"(identité ‖ éphémère), fingerprint annoncé "
+          f"{Session.peer_fingerprint(offer_a)}")
+    print(f"   Bob confronte ce fingerprint hors bande à {alice.fingerprint()} "
+          f": {Session.peer_fingerprint(offer_a) == alice.fingerprint()} ✓")
+    ka = sa.derive(offer_b)
+    kb = sb.derive(offer_a)
     print(f"   steg_key identique  : {ka['steg_key'] == kb['steg_key']} ✓")
     print(f"   key_2 identique     : {ka['key_2'] == kb['key_2']} ✓")
     print(f"   session_id          : {ka['session_id']}")
 
-    print("\n3. FORWARD SECRECY\n")
+    print("\n3. RÉSISTANCE À L'HOMME DU MILIEU\n")
+    mallory = Identity()
+    sm_a = Session(ref256, mallory); sm_b = Session(ref256, mallory)
+    sa2 = Session(ref256, alice);    sb2 = Session(ref256, bob)
+    offer_a2 = sa2.offer()
+    # Mallory relaie en substituant ses propres offers
+    k_alice   = sa2.derive(sm_a.offer())
+    k_mallory = sm_a.derive(offer_a2)
+    print(f"   Mallory partage-t-elle la clé d'Alice : "
+          f"{k_alice['steg_key'] == k_mallory['steg_key']} "
+          f"(mais l'offer annonce {Session.peer_fingerprint(sm_a.offer())}")
+    print(f"    au lieu de {bob.fingerprint()} — le fingerprint hors bande "
+          f"la démasque)")
+    k_bob = sb2.derive(sm_b.offer())
+    print(f"   Alice et Bob obtiennent-ils la même clé : "
+          f"{k_alice['steg_key'] == k_bob['steg_key']} ✓ "
+          f"(le relais ne peut pas les réconcilier)")
+
+    print("\n4. FORWARD SECRECY\n")
     try:
-        sa.derive(pub_sb)
+        sa.derive(offer_b)
     except ValueError:
         print("   Réutilisation bloquée ✓")
 
-    print("\n4. MESSAGE STÉGANO\n")
+    print("\n5. MESSAGE STÉGANO\n")
     msg = "ANIBALAMIOTX"
     grid = encode(msg, ka['steg_key'], ka['key_b'],
                   ka['key_c'], ka['key_2'], ref256)
@@ -268,7 +421,7 @@ def demo():
                      kb['key_c'], kb['key_2'], ref256)
     print(f"   Alice → Bob : '{msg}' → '{decoded}' ✓")
 
-    print("\n5. DÉNI PLAUSIBLE (2 messages, 1 grille 60×60)\n")
+    print("\n6. DÉNI PLAUSIBLE (2 messages, 1 grille 60×60)\n")
     grid_d, rk, dk = encode_deniable(
         "MESSAGE SECRET ANIBAL", "NOTES PERSO TEXTILE", ref256)
     real_out   = decode_deniable(grid_d, rk, ref256)
@@ -279,7 +432,7 @@ def demo():
     print(f"   Zone B (blocs 50..99) : faux message")
     print(f"   Propriété : impossible de prouver lequel est réel sans les deux clés")
 
-    print("\n6. IDENTITÉ EXPORTÉE\n")
+    print("\n7. IDENTITÉ EXPORTÉE\n")
     exported  = alice.export_private("passphrase_test")
     alice2    = Identity.from_export(exported, "passphrase_test")
     print(f"   {len(exported)} bytes chiffrés (Argon2id+XChaCha20) ✓")
@@ -287,7 +440,9 @@ def demo():
 
     print("\n=== ARCHITECTURE SECUBOX ===\n")
     print("  Clés long-terme : X25519 exportées chiffrées")
-    print("  Échange         : ECDH éphémère, HKDF info canonique")
+    print("  Échange         : triple DH X25519 (ee + es + se), HKDF")
+    print("  Authentification: identité liée à la session — fingerprint")
+    print("                    à vérifier hors bande")
     print("  Forward secrecy : clé éphémère détruite après derive()")
     print("  Chiffrement     : XChaCha20-Poly1305 (nonce 24 bytes)")
     print("  Dissimulation   : La Livrée d'Hermès (Ref256+Ref360)")

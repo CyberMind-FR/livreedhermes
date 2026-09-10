@@ -8,7 +8,14 @@ La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
 Commandes :
   exchange init               Génère une identité X25519
   exchange show               Affiche clé publique + fingerprint
-  exchange derive <pub_hex>   Dérive les clés de session depuis une clé publique
+  exchange offer              Publie une offer (identité + éphémère) à envoyer
+  exchange complete <offer>   Dérive la session depuis l'offer du correspondant
+
+  Échange en deux temps, symétrique : chacun lance « offer », s'envoie le
+  bloc affiché, puis lance « complete » avec celui reçu. « complete » affiche
+  le fingerprint annoncé par l'offer : le confronter au fingerprint que le
+  correspondant vous a donné par un autre canal — c'est cette vérification,
+  et elle seule, qui distingue votre correspondant d'un relais.
   send <message>              Encode + chiffre → grille CSV (session courante)
   receive <grille.csv>        Décode depuis une grille CSV
   vault init <fichier.sbvault>     Crée un vault vide
@@ -32,6 +39,7 @@ from disk_lib     import passphrase_to_key
 CONFIG_DIR  = os.path.expanduser('~/.secubox')
 IDENTITY_FILE = os.path.join(CONFIG_DIR, 'identity.enc')
 SESSION_FILE  = os.path.join(CONFIG_DIR, 'session.json')
+PENDING_FILE  = os.path.join(CONFIG_DIR, 'pending.bin')
 
 def _ensure_config():
     os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
@@ -46,7 +54,7 @@ def _load_identity() -> Identity:
 
 def _load_session() -> dict:
     if not os.path.exists(SESSION_FILE):
-        print("Aucune session active. Lancer : secu-box exchange derive <pub>",
+        print("Aucune session active. Lancer : secu-box exchange offer",
               file=sys.stderr)
         sys.exit(1)
     with open(SESSION_FILE) as f:
@@ -79,33 +87,88 @@ def cmd_exchange_init(args):
     print(f"  Clé publique  : {identity.public_bytes.hex()}")
     print(f"  Fingerprint   : {identity.fingerprint()}")
     print(f"  Fichier       : {IDENTITY_FILE}")
-    print(f"\nPartager la clé publique avec vos correspondants.")
+    print(f"\nCette clé publique n'est pas transmise telle quelle : elle voyage")
+    print(f"dans l'offer produite par « exchange offer ». Communiquer le")
+    print(f"fingerprint ci-dessus par un canal sûr.")
 
 def cmd_exchange_show(args):
     identity = _load_identity()
     print(f"Clé publique : {identity.public_bytes.hex()}")
     print(f"Fingerprint  : {identity.fingerprint()}")
-    print(f"\nVérifier le fingerprint avec votre correspondant par un canal sûr.")
+    print(f"\nDonner ce fingerprint à vos correspondants par un canal sûr :")
+    print(f"« exchange complete » le leur fera confronter à celui que votre")
+    print(f"offer annonce, et c'est cette confrontation qui écarte un relais.")
 
-def cmd_exchange_derive(args):
+def cmd_exchange_offer(args):
+    """Premier temps : publier identité + éphémère, garder l'éphémère privée."""
     _ensure_config()
     ref256, _ = load_referents()
-    their_pub = bytes.fromhex(args.public_key.strip())
-    if len(their_pub) != 32:
-        print("Clé publique invalide (32 bytes hex attendus)", file=sys.stderr)
+    identity  = _load_identity()
+    session   = Session(ref256, identity)
+    with open(PENDING_FILE, 'wb') as f:
+        f.write(session.export_pending())
+    os.chmod(PENDING_FILE, 0o600)
+    print("Votre offer — à transmettre au correspondant :\n")
+    print(f"  {session.offer().hex()}\n")
+    print(f"Votre fingerprint : {identity.fingerprint()}")
+    print("Le lui donner par un autre canal (voix, rencontre) : c'est ce qui")
+    print("lui permettra de vérifier que l'offer vient bien de vous.")
+    print("\nÀ réception de la sienne : secu-box exchange complete <offer>")
+
+def cmd_exchange_complete(args):
+    """Second temps : dériver la session depuis l'offer reçue."""
+    _ensure_config()
+    if not os.path.exists(PENDING_FILE):
+        print("Aucune offer en attente. Lancer d'abord : secu-box exchange offer",
+              file=sys.stderr)
         sys.exit(1)
-    session = Session(ref256)
-    my_pub  = session.public_bytes
-    print(f"Votre clé éphémère : {my_pub.hex()}")
-    print(f"→ Envoyer cette clé à votre correspondant pour qu'il dérive sa session.")
-    input("Appuyer sur Entrée après avoir reçu la clé éphémère du correspondant...")
-    keys = session.derive(their_pub)
+    ref256, _ = load_referents()
+    identity  = _load_identity()
+
+    try:
+        their_offer = bytes.fromhex(args.offer.strip())
+    except ValueError:
+        print("Offer invalide (hexadécimal attendu)", file=sys.stderr)
+        sys.exit(1)
+    try:
+        fingerprint = Session.peer_fingerprint(their_offer)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    print(f"L'offer annonce le fingerprint : {fingerprint}")
+    if not args.yes:
+        print("Confronter ce fingerprint à celui que votre correspondant vous a")
+        print("donné par un autre canal. S'ils diffèrent, quelqu'un s'interpose.")
+        if input("Correspond-il ? [o/N] ").strip().lower() not in ('o','oui','y','yes'):
+            print("Échange interrompu — session non dérivée.", file=sys.stderr)
+            sys.exit(1)
+
+    with open(PENDING_FILE, 'rb') as f:
+        pending = f.read()
+    try:
+        session = Session.resume(ref256, identity, pending)
+    except Exception:
+        print("Offer en attente illisible (identité différente ?). "
+              "Relancer : secu-box exchange offer", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        keys = session.derive(their_offer)
+    except ValueError as e:
+        print(f"Dérivation refusée : {e}", file=sys.stderr)
+        sys.exit(1)
+
     with open(SESSION_FILE, 'w') as f:
         json.dump({k: (v.hex() if isinstance(v, bytes) else v)
                    for k, v in keys.items()}, f, indent=2)
     os.chmod(SESSION_FILE, 0o600)
-    print(f"✓ Session dérivée : {keys['session_id']}")
+    os.unlink(PENDING_FILE)          # referme la fenêtre de forward secrecy
+
+    print(f"\n✓ Session dérivée : {keys['session_id']}")
     print(f"  Clé de session  : {keys['steg_key'].hex()[:24]}...")
+    print(f"  Authentifiée    : triple DH — l'identité {fingerprint} est liée")
+    print(f"                    à cette session")
     print(f"  Forward secrecy : clé éphémère détruite ✓")
 
 def cmd_send(args):
@@ -219,8 +282,11 @@ def main():
     ei = exsub.add_parser('init', help='Créer une identité')
     ei.add_argument('--force', action='store_true')
     exsub.add_parser('show', help='Afficher la clé publique')
-    ed = exsub.add_parser('derive', help='Dériver une session depuis une clé publique')
-    ed.add_argument('public_key', help='Clé publique hex (64 chars) du correspondant')
+    exsub.add_parser('offer', help='Publier une offer (identité + éphémère)')
+    ec = exsub.add_parser('complete', help='Dériver la session depuis une offer reçue')
+    ec.add_argument('offer', help='Offer hex (128 chars) du correspondant')
+    ec.add_argument('-y','--yes', action='store_true',
+                    help='Ne pas demander la confirmation du fingerprint')
 
     # send
     sn = sub.add_parser('send', help='Encoder un message stégano')
@@ -258,7 +324,8 @@ def main():
     dispatch = {
         ('exchange','init')  : cmd_exchange_init,
         ('exchange','show')  : cmd_exchange_show,
-        ('exchange','derive'): cmd_exchange_derive,
+        ('exchange','offer'):   cmd_exchange_offer,
+        ('exchange','complete'):cmd_exchange_complete,
         ('send',    None)    : cmd_send,
         ('receive', None)    : cmd_receive,
         ('vault',   'init')  : cmd_vault_init,
