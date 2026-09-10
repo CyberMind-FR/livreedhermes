@@ -260,3 +260,415 @@ def demo():
 
 if __name__ == '__main__':
     demo()
+
+# ── Grille Carter — Grammaire à 3 catégories dérivées de la clé ───────────────
+# Intégration de carter.py dans stegano_lib
+# Référence : Grille Carter, La Livrée d'Hermès, Anibal Edelberto Amiot 2026
+
+CARTER_GRID  = 90
+CARTER_BLOCK = 6
+CARTER_SIDE  = CARTER_GRID // CARTER_BLOCK    # 15 blocs par côté
+CARTER_N     = CARTER_SIDE ** 2               # 225 blocs
+
+_PURE, _STRUCTURED, _MESSAGE = 0, 1, 2
+
+def _carter_grammar(master_key: bytes, ref256: List[Dict]) -> List[Dict]:
+    """
+    Dérive la grammaire Carter depuis la clé maître (HKDF-SHA256).
+    Assigne à chaque bloc un rôle et une forme géométrique.
+    Sans la clé, les rôles sont inconnus → grammaire = couche secrète.
+    """
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes as _hh
+    km = HKDF(_hh.SHA256(), CARTER_N * 4,
+              salt=b'Carter-grammar-v1',
+              info=b'block-roles-and-forms').derive(master_key)
+    grammar = []
+    for i in range(CARTER_N):
+        b = km[i*4 : i*4+4]
+        rb = b[0]
+        role = _PURE if rb < 85 else (_STRUCTURED if rb < 170 else _MESSAGE)
+        grammar.append({
+            'role':    role,
+            'form_id': (b[1] * len(ref256)) // 256,
+            'color':   'blue' if b[2] < 128 else 'orange',
+            'orient':  b[3] % 8,
+        })
+    return grammar
+
+def _carter_positions(br: int, bc: int, g: Dict, ref256: List[Dict]) -> List[Tuple]:
+    """6 positions de lecture du bloc (br, bc) selon la grammaire g."""
+    form = ref256[g['form_id'] % len(ref256)]
+    base = form[g['color']]
+    t    = apply_orientation(base, g['orient'])
+    r0, c0 = br * CARTER_BLOCK, bc * CARTER_BLOCK
+    return [(r0+r, c0+c) for r, c in t
+            if 0 <= r0+r < CARTER_GRID and 0 <= c0+c < CARTER_GRID]
+
+def encode_carter(message: str, master_key: bytes,
+                  ref256: List[Dict]) -> List[List[int]]:
+    """
+    Encode un message dans une grille Carter 90×90.
+
+    La clé maître dérive :
+      - La grammaire (rôles des 225 blocs : pur / structuré / message)
+      - La forme géométrique de chaque bloc non-pur
+
+    Blocs 'message'    → positions = nibbles du message chiffré (XChaCha20)
+    Blocs 'structuré'  → positions = valeurs aléatoires (indiscernables)
+    Blocs 'pur'        → tout aléatoire, aucune structure appliquée
+
+    grid_to_csv() pour sérialiser, csv_to_grid() pour désérialiser.
+    """
+    import secrets as _sec
+    grammar = _carter_grammar(master_key, ref256)
+    n_msg   = sum(1 for g in grammar if g['role'] == _MESSAGE)
+
+    payload = _encrypt(message, master_key)
+    nibbles = []
+    for b in payload:
+        hi, lo = _byte_to_nibs(b)
+        nibbles += [hi, lo]
+
+    if len(nibbles) > n_msg * 6:
+        raise ValueError(
+            f"Message trop long pour la grammaire dérivée : "
+            f"{len(nibbles)//2} bytes > {n_msg * 3} bytes disponibles. "
+            f"Changer la clé ou réduire le message.")
+
+    grid  = [[_sec.randbelow(ALPHA_LEN) for _ in range(CARTER_GRID)]
+              for _ in range(CARTER_GRID)]
+    nib_i = 0
+    for i, g in enumerate(grammar):
+        if g['role'] != _MESSAGE: continue
+        br, bc = i // CARTER_SIDE, i % CARTER_SIDE
+        for gr, gc in _carter_positions(br, bc, g, ref256):
+            if nib_i >= len(nibbles): break
+            grid[gr][gc] = nibbles[nib_i]; nib_i += 1
+    return grid
+
+def decode_carter(grid: List[List[int]], master_key: bytes,
+                  ref256: List[Dict]) -> str:
+    """
+    Décode une grille Carter. La grammaire est re-dérivée depuis la clé.
+    Lève ValueError si la clé est incorrecte (tag Poly1305 invalide).
+    """
+    grammar = _carter_grammar(master_key, ref256)
+    vals = []
+    for i, g in enumerate(grammar):
+        if g['role'] != _MESSAGE: continue
+        br, bc = i // CARTER_SIDE, i % CARTER_SIDE
+        vals.extend(grid[gr][gc]
+                    for gr, gc in _carter_positions(br, bc, g, ref256))
+    return _decrypt(vals, master_key)
+
+def carter_capacity(master_key: bytes, ref256: List[Dict]) -> Dict:
+    """Retourne les statistiques de capacité de la grammaire dérivée."""
+    grammar = _carter_grammar(master_key, ref256)
+    n_msg = sum(1 for g in grammar if g['role'] == _MESSAGE)
+    n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
+    n_pur = sum(1 for g in grammar if g['role'] == _PURE)
+    overhead = 4 + 24 + 16   # header + nonce + tag XChaCha20
+    return {
+        'blocs_message':    n_msg,
+        'blocs_structure':  n_str,
+        'blocs_purs':       n_pur,
+        'nibbles':          n_msg * 6,
+        'bytes_bruts':      n_msg * 3,
+        'bytes_utiles':     n_msg * 3 - overhead,
+        'chars_max':        max(0, n_msg * 3 - overhead),
+        'ambiguite':        f"1 message parmi {n_msg + n_str} blocs structurés",
+    }
+
+# ── Référent 360 — Grille Carter 180×180 ──────────────────────────────────────
+# Blocs 12×12, 8 positions par forme (une couleur parmi C1/C2/C3)
+# Même structure Carter que 90×90 : 225 blocs, grammaire dérivée de la clé
+
+CARTER360_GRID  = 180
+CARTER360_BLOCK = 12
+CARTER360_SIDE  = CARTER360_GRID // CARTER360_BLOCK   # 15
+CARTER360_N     = CARTER360_SIDE ** 2                  # 225
+
+_COLORS_360 = ['C1', 'C2', 'C3']
+
+def _load_ref360() -> List[Dict]:
+    """Charge le Référent 360 (formes complètes 3×8=24 positions)."""
+    import json
+    with open(_find_ref('referent_360.json')) as f:
+        raw = json.load(f)
+    return [f for f in raw
+            if (isinstance(f['positions'], dict) and
+                sum(len(v) for v in f['positions'].values()) == 24)]
+
+def _carter360_grammar(master_key: bytes, ref360: List[Dict]) -> List[Dict]:
+    """
+    Dérive la grammaire Carter pour le Référent 360 (blocs 12×12).
+    Même principe que _carter_grammar pour Ref256,
+    mais avec 3 couleurs (C1/C2/C3) au lieu de 2 (blue/orange).
+    """
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes as _hh
+    km = HKDF(_hh.SHA256(), CARTER360_N * 4,
+              salt=b'Carter360-grammar-v1',
+              info=b'block-roles-360-forms').derive(master_key)
+    grammar = []
+    for i in range(CARTER360_N):
+        b = km[i*4 : i*4+4]
+        rb = b[0]
+        role = _PURE if rb < 85 else (_STRUCTURED if rb < 170 else _MESSAGE)
+        grammar.append({
+            'role':    role,
+            'form_id': (b[1] * len(ref360)) // 256,
+            'color':   _COLORS_360[b[2] % 3],
+            'orient':  b[3] % 6,   # 6 permutations de couleurs
+        })
+    return grammar
+
+def _carter360_positions(br: int, bc: int,
+                          g: Dict, ref360: List[Dict]) -> List[Tuple]:
+    """8 positions de lecture du bloc 12×12 (br, bc) selon la grammaire g."""
+    form = ref360[g['form_id'] % len(ref360)]
+    pts  = form['positions'].get(g['color'], [])
+    r0, c0 = br * CARTER360_BLOCK, bc * CARTER360_BLOCK
+    return [(r0+r, c0+c) for r, c in pts
+            if 0 <= r0+r < CARTER360_GRID and 0 <= c0+c < CARTER360_GRID]
+
+def encode_carter_360(message: str, master_key: bytes,
+                       ref360: Optional[List[Dict]] = None) -> List[List[int]]:
+    """
+    Encode un message dans une grille Carter 180×180 (Référent 360).
+
+    Grammaire dérivée de master_key :
+      'pur'       → bruit aléatoire, aucune structure 12×12
+      'structuré' → forme Ref360 appliquée, valeurs aléatoires
+      'message'   → forme Ref360 appliquée, valeurs = message XChaCha20
+
+    Capacité utile : ~256 caractères (vs ~181 pour Carter 90×90 Ref256).
+    """
+    import secrets as _sec
+    if ref360 is None:
+        ref360 = _load_ref360()
+
+    grammar = _carter360_grammar(master_key, ref360)
+    n_msg   = sum(1 for g in grammar if g['role'] == _MESSAGE)
+
+    payload = _encrypt(message, master_key)
+    nibbles = []
+    for b in payload:
+        hi, lo = _byte_to_nibs(b)
+        nibbles += [hi, lo]
+
+    if len(nibbles) > n_msg * 8:
+        raise ValueError(
+            f"Message trop long : {len(nibbles)//2} bytes > "
+            f"{n_msg * 4} bytes disponibles ({n_msg} blocs × 8 positions / 2).")
+
+    grid  = [[_sec.randbelow(ALPHA_LEN) for _ in range(CARTER360_GRID)]
+              for _ in range(CARTER360_GRID)]
+    nib_i = 0
+    for i, g in enumerate(grammar):
+        if g['role'] != _MESSAGE: continue
+        br, bc = i // CARTER360_SIDE, i % CARTER360_SIDE
+        for gr, gc in _carter360_positions(br, bc, g, ref360):
+            if nib_i >= len(nibbles): break
+            grid[gr][gc] = nibbles[nib_i]; nib_i += 1
+    return grid
+
+def decode_carter_360(grid: List[List[int]], master_key: bytes,
+                       ref360: Optional[List[Dict]] = None) -> str:
+    """Décode une grille Carter 180×180. Lève ValueError si clé incorrecte."""
+    if ref360 is None:
+        ref360 = _load_ref360()
+    grammar = _carter360_grammar(master_key, ref360)
+    vals = []
+    for i, g in enumerate(grammar):
+        if g['role'] != _MESSAGE: continue
+        br, bc = i // CARTER360_SIDE, i % CARTER360_SIDE
+        vals.extend(grid[gr][gc]
+                    for gr, gc in _carter360_positions(br, bc, g, ref360))
+    return _decrypt(vals, master_key)
+
+def carter360_capacity(master_key: bytes,
+                        ref360: Optional[List[Dict]] = None) -> Dict:
+    """Statistiques de capacité de la grammaire Carter 360."""
+    if ref360 is None:
+        ref360 = _load_ref360()
+    grammar = _carter360_grammar(master_key, ref360)
+    n_msg = sum(1 for g in grammar if g['role'] == _MESSAGE)
+    n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
+    n_pur = sum(1 for g in grammar if g['role'] == _PURE)
+    overhead = 4 + 24 + 16
+    return {
+        'referent':         '360',
+        'grille':           f'{CARTER360_GRID}×{CARTER360_GRID}',
+        'blocs_message':    n_msg,
+        'blocs_structure':  n_str,
+        'blocs_purs':       n_pur,
+        'positions_bloc':   8,
+        'nibbles':          n_msg * 8,
+        'bytes_utiles':     max(0, n_msg * 4 - overhead),
+        'chars_max':        max(0, n_msg * 4 - overhead),
+        'ambiguite':        f"1 message parmi {n_msg + n_str} blocs structurés",
+    }
+
+# ── Grille Carter Mixte 180×180 — Ref256 + Ref360 combinés ────────────────────
+# Grammaire opérant sur 225 méta-blocs 12×12.
+# Chaque méta-bloc reçoit un référent (256 ou 360) et un rôle (pur/structuré/message).
+# La clé détermine tout — référent, rôle, forme, couleur, orientation.
+
+CARTER_MIX_GRID  = 180
+CARTER_MIX_META  = 12           # méta-bloc 12×12
+CARTER_MIX_SIDE  = 15           # méta-blocs par côté (180/12)
+CARTER_MIX_N     = 225          # total méta-blocs
+_REF256, _REF360 = 0, 1         # identifiants de référent
+
+def _carter_mix_grammar(master_key: bytes,
+                         ref256: List[Dict],
+                         ref360: List[Dict]) -> List[Dict]:
+    """
+    Dérive la grammaire Carter mixte depuis la clé maître.
+    Pour chaque méta-bloc 12×12 (225 total) :
+      - référent : 256 (4 sous-blocs 6×6) ou 360 (1 bloc 12×12)
+      - rôle     : pur / structuré / message
+      - forme    : issue du référent sélectionné
+    Sans la clé, référent ET rôle sont inconnus.
+    """
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes as _hh
+    km = HKDF(_hh.SHA256(), CARTER_MIX_N * 5,
+              salt=b'CarterMix-v1',
+              info=b'mixed-256-360-grammar').derive(master_key)
+    grammar = []
+    for i in range(CARTER_MIX_N):
+        b = km[i*5 : i*5+5]
+        role = _PURE if b[0] < 85 else (_STRUCTURED if b[0] < 170 else _MESSAGE)
+        ref  = _REF256 if b[1] < 128 else _REF360
+        if ref == _REF256:
+            cfg = {'form_id': (b[2] * len(ref256)) // 256,
+                   'color':   'blue' if b[3] < 128 else 'orange',
+                   'orient':  b[4] % 8}
+        else:
+            cfg = {'form_id': (b[2] * len(ref360)) // 256,
+                   'color':   _COLORS_360[b[3] % 3],
+                   'orient':  b[4] % 6}
+        grammar.append({'role': role, 'ref': ref, **cfg})
+    return grammar
+
+def _mix_positions(mbr: int, mbc: int,
+                   g: Dict, ref256: List[Dict],
+                   ref360: List[Dict]) -> List[Tuple]:
+    """
+    Positions de lecture d'un méta-bloc (mbr, mbc) selon sa grammaire.
+    Ref256 : 4 sous-blocs × 6 = 24 positions
+    Ref360 : 1 bloc 12×12 × 8 =  8 positions
+    """
+    N = CARTER_MIX_GRID
+    if g['ref'] == _REF256:
+        form = ref256[g['form_id'] % len(ref256)]
+        base = form[g['color']]
+        t    = apply_orientation(base, g['orient'])
+        pos  = []
+        for dr in range(2):      # 2×2 sous-blocs dans le méta-bloc
+            for dc in range(2):
+                r0 = mbr * CARTER_MIX_META + dr * CARTER_BLOCK
+                c0 = mbc * CARTER_MIX_META + dc * CARTER_BLOCK
+                for r, c in t:
+                    gr, gc = r0+r, c0+c
+                    if 0 <= gr < N and 0 <= gc < N:
+                        pos.append((gr, gc))
+        return pos   # jusqu'à 24
+    else:
+        form = ref360[g['form_id'] % len(ref360)]
+        pts  = form['positions'].get(g['color'], [])
+        r0   = mbr * CARTER_MIX_META
+        c0   = mbc * CARTER_MIX_META
+        return [(r0+r, c0+c) for r, c in pts
+                if 0 <= r0+r < N and 0 <= c0+c < N]  # 8
+
+def encode_carter_mix(message: str, master_key: bytes,
+                       ref256: List[Dict],
+                       ref360: Optional[List[Dict]] = None) -> List[List[int]]:
+    """
+    Encode un message dans une grille Carter mixte 180×180.
+    Ref256 et Ref360 coexistent — la clé détermine quel référent chaque méta-bloc utilise.
+
+    Méta-blocs Ref256 message : 24 positions = 12 bytes
+    Méta-blocs Ref360 message :  8 positions =  4 bytes
+
+    La capacité totale est elle-même dérivée de la clé (obscurcissement).
+    """
+    import secrets as _sec
+    if ref360 is None:
+        ref360 = _load_ref360()
+
+    grammar = _carter_mix_grammar(master_key, ref256, ref360)
+    # Calculer la capacité
+    nibbles_cap = sum(len(_mix_positions(i//CARTER_MIX_SIDE, i%CARTER_MIX_SIDE,
+                                          g, ref256, ref360))
+                      for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+
+    payload = _encrypt(message, master_key)
+    nibbles = []
+    for b in payload:
+        hi, lo = _byte_to_nibs(b)
+        nibbles += [hi, lo]
+
+    if len(nibbles) > nibbles_cap:
+        raise ValueError(
+            f"Message trop long : {len(nibbles)//2} bytes > "
+            f"{nibbles_cap//2} bytes disponibles dans la grammaire dérivée.")
+
+    grid  = [[_sec.randbelow(ALPHA_LEN) for _ in range(CARTER_MIX_GRID)]
+              for _ in range(CARTER_MIX_GRID)]
+    nib_i = 0
+    for i, g in enumerate(grammar):
+        if g['role'] != _MESSAGE: continue
+        mbr, mbc = i // CARTER_MIX_SIDE, i % CARTER_MIX_SIDE
+        for gr, gc in _mix_positions(mbr, mbc, g, ref256, ref360):
+            if nib_i >= len(nibbles): break
+            grid[gr][gc] = nibbles[nib_i]; nib_i += 1
+    return grid
+
+def decode_carter_mix(grid: List[List[int]], master_key: bytes,
+                       ref256: List[Dict],
+                       ref360: Optional[List[Dict]] = None) -> str:
+    """Décode une grille Carter mixte 180×180."""
+    if ref360 is None:
+        ref360 = _load_ref360()
+    grammar = _carter_mix_grammar(master_key, ref256, ref360)
+    vals = []
+    for i, g in enumerate(grammar):
+        if g['role'] != _MESSAGE: continue
+        mbr, mbc = i // CARTER_MIX_SIDE, i % CARTER_MIX_SIDE
+        vals.extend(grid[gr][gc]
+                    for gr, gc in _mix_positions(mbr, mbc, g, ref256, ref360))
+    return _decrypt(vals, master_key)
+
+def carter_mix_capacity(master_key: bytes,
+                         ref256: List[Dict],
+                         ref360: Optional[List[Dict]] = None) -> Dict:
+    """Statistiques de capacité de la grammaire Carter mixte."""
+    if ref360 is None:
+        ref360 = _load_ref360()
+    grammar = _carter_mix_grammar(master_key, ref256, ref360)
+    n256m = sum(1 for g in grammar if g['role']==_MESSAGE and g['ref']==_REF256)
+    n360m = sum(1 for g in grammar if g['role']==_MESSAGE and g['ref']==_REF360)
+    n256s = sum(1 for g in grammar if g['role']==_STRUCTURED and g['ref']==_REF256)
+    n360s = sum(1 for g in grammar if g['role']==_STRUCTURED and g['ref']==_REF360)
+    n_pur = sum(1 for g in grammar if g['role']==_PURE)
+    nibs  = n256m*24 + n360m*8
+    overhead = 4+24+16
+    return {
+        'grille':              f'{CARTER_MIX_GRID}×{CARTER_MIX_GRID}',
+        'meta_blocs':          CARTER_MIX_N,
+        'message_ref256':      n256m,
+        'message_ref360':      n360m,
+        'structure_ref256':    n256s,
+        'structure_ref360':    n360s,
+        'purs':                n_pur,
+        'nibbles_total':       nibs,
+        'bytes_utiles':        max(0, nibs//2 - overhead),
+        'chars_max':           max(0, nibs//2 - overhead),
+        'ambiguite_256':       f"1/{n256m+n256s} méta-blocs Ref256",
+        'ambiguite_360':       f"1/{n360m+n360s} méta-blocs Ref360",
+    }

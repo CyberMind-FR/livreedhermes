@@ -294,6 +294,19 @@
               <button type="button" class="enc-btn secondary" id="btnDownloadKeys">⬇ Télécharger les clés (JSON)</button>
             </div>
           </div>
+
+          <div class="enc-card">
+            <h2>Grille Carter 90×90 (grammaire dérivée de la clé)</h2>
+            <p class="ref-note">Une seule passphrase dérive le rôle (pur / structuré / message), la forme et l'orientation de chacun des 225 blocs 6×6 — aucun placement n'est stocké en dehors de la clé. Les blocs « structurés » et « message » sont statistiquement indiscernables sans elle.</p>
+            <label class="enc-label">Passphrase Carter</label>
+            <input type="password" class="enc-input" id="carter-passphrase" placeholder="Passphrase Carter" autocomplete="off">
+            <label class="enc-label">Message à encoder</label>
+            <input type="text" class="enc-input" id="carter-message" placeholder="VOTRE MESSAGE ICI" maxlength="200">
+            <button type="button" class="enc-btn" id="btnCarterEncode">Encoder et télécharger grille_carter.csv</button>
+            <div id="carter-encode-result" hidden>
+              <div class="enc-info-box" id="carter-encode-info"></div>
+            </div>
+          </div>
         </div>
 
         <!-- DECODER -->
@@ -326,6 +339,19 @@
             <input type="file" class="enc-input" id="dec-file-grid" accept=".csv">
             <label class="enc-label">Fichier des clés (JSON)</label>
             <input type="file" class="enc-input" id="dec-file-keys" accept=".json">
+          </div>
+
+          <div class="enc-card">
+            <h2>Décoder une grille Carter 90×90</h2>
+            <label class="enc-label">Passphrase Carter</label>
+            <input type="password" class="enc-input" id="carter-dec-passphrase" placeholder="Passphrase Carter" autocomplete="off">
+            <label class="enc-label">Grille CSV (coller ou charger)</label>
+            <textarea class="enc-textarea" id="carter-dec-grid" placeholder="1,23,5,14,2,..."></textarea>
+            <input type="file" class="enc-input" id="carter-dec-file-grid" accept=".csv">
+            <button type="button" class="enc-btn" id="btnCarterDecode">Décoder</button>
+            <div id="carter-dec-result" hidden>
+              <div class="enc-result-box" id="carter-dec-msg"></div>
+            </div>
           </div>
         </div>
 
@@ -769,6 +795,109 @@
     };
   }
 
+  // ============================================================
+  // Grille Carter — grammaire à 3 rôles dérivée de la clé (stegano_lib.py,
+  // section Carter, portée en JS). Contrairement à encode/decode ci-dessus
+  // (Clés B/C/2 explicites), ici une SEULE clé maître dérive par HKDF-SHA256
+  // le rôle (pur / structuré / message), la forme, la couleur et l'orientation
+  // de chacun des 225 blocs 6×6 d'une grille 90×90 — aucune métadonnée de
+  // placement n'existe en dehors de la clé. Les blocs « structurés » et
+  // « message » sont statistiquement indiscernables sans elle. Seul le mode
+  // 90×90/Ref256 est implémenté ici ; les variantes 360 et mixte (180×180)
+  // exigent le Référent 360 complet, pas encore disponible dans /data/.
+  // Réutilise stegEncryptPayload/stegDecryptPayload (AES-256-GCM, substitué
+  // à XChaCha20-Poly1305 — voir note en tête de section stéganographie) et
+  // stegApplyOrientation. Vérifié octet pour octet contre
+  // stegano_lib.py::_carter_grammar avant intégration.
+  // ============================================================
+  const CARTER_GRID = 90, CARTER_BLOCK = 6, CARTER_SIDE = 15, CARTER_N = 225;
+  const CARTER_PURE = 0, CARTER_STRUCTURED = 1, CARTER_MESSAGE = 2;
+
+  async function carterDeriveMasterKey(passphrase){
+    const keyMat = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), {name:'PBKDF2'}, false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt: new TextEncoder().encode('SecuBox-Carter-KDF-v1'), iterations:300000, hash:'SHA-256'}, keyMat, 256);
+    return new Uint8Array(bits);
+  }
+
+  async function carterGrammar(masterKey, ref256Len){
+    const keyMaterial = await crypto.subtle.importKey('raw', masterKey, 'HKDF', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt: new TextEncoder().encode('Carter-grammar-v1'), info: new TextEncoder().encode('block-roles-and-forms')}, keyMaterial, CARTER_N*4*8);
+    const km = new Uint8Array(bits);
+    const grammar = [];
+    for(let i=0;i<CARTER_N;i++){
+      const b0=km[i*4], b1=km[i*4+1], b2=km[i*4+2], b3=km[i*4+3];
+      const role = b0<85 ? CARTER_PURE : (b0<170 ? CARTER_STRUCTURED : CARTER_MESSAGE);
+      grammar.push({
+        role,
+        form_id: Math.floor((b1*ref256Len)/256),
+        color: b2<128 ? 'blue' : 'orange',
+        orient: b3%8,
+      });
+    }
+    return grammar;
+  }
+
+  function carterPositions(br, bc, g, ref256){
+    const form = ref256[g.form_id % ref256.length];
+    const base = form[g.color];
+    const t = stegApplyOrientation(base, g.orient);
+    const r0 = br*CARTER_BLOCK, c0 = bc*CARTER_BLOCK;
+    const out = [];
+    for(const [r,c] of t){
+      const gr=r0+r, gc=c0+c;
+      if(gr>=0 && gr<CARTER_GRID && gc>=0 && gc<CARTER_GRID) out.push([gr,gc]);
+    }
+    return out;
+  }
+
+  async function carterCapacity(masterKey, ref256){
+    const grammar = await carterGrammar(masterKey, ref256.length);
+    const nMsg = grammar.filter(g=>g.role===CARTER_MESSAGE).length;
+    const nStr = grammar.filter(g=>g.role===CARTER_STRUCTURED).length;
+    const nPur = grammar.filter(g=>g.role===CARTER_PURE).length;
+    const overhead = 4+12+16; // AES-256-GCM (12B nonce), pas les 24B XChaCha20 de la référence Python
+    return {
+      blocsMessage: nMsg, blocsStructure: nStr, blocsPurs: nPur,
+      charsMax: Math.max(0, nMsg*3 - overhead),
+      ambiguite: `1 message parmi ${nMsg+nStr} blocs structurés`,
+    };
+  }
+
+  async function encodeCarter(message, masterKey, ref256){
+    const grammar = await carterGrammar(masterKey, ref256.length);
+    const nMsg = grammar.filter(g=>g.role===CARTER_MESSAGE).length;
+    const payload = await stegEncryptPayload(message, masterKey);
+    const nibbles = [];
+    for(const b of payload){ nibbles.push(b>>4); nibbles.push(b&0xF); }
+    if(nibbles.length > nMsg*6) throw new Error(`Message trop long pour la grammaire dérivée : ${Math.floor(nibbles.length/2)} bytes > ${nMsg*3} bytes disponibles. Changer la clé ou réduire le message.`);
+    const flatNoise = stegRandomInts(CARTER_GRID*CARTER_GRID, ALPHABET.length);
+    const grid = [];
+    for(let r=0;r<CARTER_GRID;r++) grid.push(flatNoise.slice(r*CARTER_GRID,(r+1)*CARTER_GRID));
+    let nibI=0;
+    for(let i=0;i<grammar.length;i++){
+      const g = grammar[i];
+      if(g.role !== CARTER_MESSAGE) continue;
+      const br = Math.floor(i/CARTER_SIDE), bc = i%CARTER_SIDE;
+      for(const [gr,gc] of carterPositions(br,bc,g,ref256)){
+        if(nibI>=nibbles.length) break;
+        grid[gr][gc] = nibbles[nibI]; nibI++;
+      }
+    }
+    return grid;
+  }
+
+  async function decodeCarter(grid, masterKey, ref256){
+    const grammar = await carterGrammar(masterKey, ref256.length);
+    const vals = [];
+    for(let i=0;i<grammar.length;i++){
+      const g = grammar[i];
+      if(g.role !== CARTER_MESSAGE) continue;
+      const br = Math.floor(i/CARTER_SIDE), bc = i%CARTER_SIDE;
+      for(const [gr,gc] of carterPositions(br,bc,g,ref256)) vals.push(grid[gr][gc]);
+    }
+    return stegDecryptPayload(vals, masterKey);
+  }
+
   function stegDrawGrid(grid, keyBArr, keyC, key2, ref256, canvasId){
     const N=grid.length, B=Math.floor(N/6);
     const cs=8;
@@ -1110,6 +1239,51 @@
       const grid = csvStr.split('\n').map(r=>r.split(',').map(Number));
       const stegKey = stegHexToBytes(scSession.stegKeyHex);
       const msg = await stegDecode(grid, stegKey, scSession.keyB, scSession.keyC, scSession.key2, REF256, scSession.gridSize);
+      resultBox.hidden = false;
+      resultEl.innerHTML = `Message décodé : <span class="enc-msg">${msg}</span>`;
+    }catch(e){
+      resultBox.hidden = false;
+      resultEl.textContent = 'Clé incorrecte ou grille corrompue : ' + e.message;
+    }
+  }
+
+  async function onCarterEncode(){
+    const infoEl = document.getElementById('carter-encode-info');
+    const resultBox = document.getElementById('carter-encode-result');
+    if(!REF256) return;
+    const pass = document.getElementById('carter-passphrase').value;
+    if(!pass){ resultBox.hidden=false; infoEl.textContent = 'Entre une passphrase Carter.'; return; }
+    const msg = document.getElementById('carter-message').value.trim().toUpperCase();
+    if(!msg){ resultBox.hidden=false; infoEl.textContent = 'Entre un message.'; return; }
+    try{
+      const masterKey = await carterDeriveMasterKey(pass);
+      const grid = await encodeCarter(msg, masterKey, REF256);
+      const cap = await carterCapacity(masterKey, REF256);
+      const blob = new Blob([gridToCsv(grid)], {type:'text/csv'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'grille_carter.csv';
+      a.click();
+      resultBox.hidden = false;
+      infoEl.innerHTML = `« ${msg} » encodé et téléchargé — grille_carter.csv<br>Grammaire : ${cap.blocsMessage} blocs message, ${cap.blocsStructure} structurés, ${cap.blocsPurs} purs — ${cap.ambiguite}.`;
+    }catch(e){
+      resultBox.hidden = false;
+      infoEl.textContent = 'Erreur : ' + e.message;
+    }
+  }
+
+  async function onCarterDecode(){
+    const resultEl = document.getElementById('carter-dec-msg');
+    const resultBox = document.getElementById('carter-dec-result');
+    if(!REF256) return;
+    const pass = document.getElementById('carter-dec-passphrase').value;
+    if(!pass){ resultBox.hidden=false; resultEl.textContent = 'Entre la passphrase Carter.'; return; }
+    const csvStr = document.getElementById('carter-dec-grid').value.trim();
+    if(!csvStr){ resultBox.hidden=false; resultEl.textContent = 'Colle ou charge une grille CSV.'; return; }
+    try{
+      const grid = csvStr.split('\n').map(r=>r.split(',').map(Number));
+      const masterKey = await carterDeriveMasterKey(pass);
+      const msg = await decodeCarter(grid, masterKey, REF256);
       resultBox.hidden = false;
       resultEl.innerHTML = `Message décodé : <span class="enc-msg">${msg}</span>`;
     }catch(e){
@@ -1957,6 +2131,15 @@
     document.getElementById('vault-file-open').addEventListener('change', function(){ onVaultFileOpen(this); });
     document.getElementById('btnVaultAdd').addEventListener('click', onVaultAdd);
     document.getElementById('btnVaultExport').addEventListener('click', onVaultExport);
+
+    document.getElementById('btnCarterEncode').addEventListener('click', onCarterEncode);
+    document.getElementById('btnCarterDecode').addEventListener('click', onCarterDecode);
+    document.getElementById('carter-dec-file-grid').addEventListener('change', function(){
+      if(!this.files[0]) return;
+      const fr = new FileReader();
+      fr.onload = e => { document.getElementById('carter-dec-grid').value = e.target.result; };
+      fr.readAsText(this.files[0]);
+    });
   }
 
   document.addEventListener('DOMContentLoaded', function(){
