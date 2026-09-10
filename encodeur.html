@@ -360,7 +360,7 @@
           <div class="enc-card">
             <h2>Vault chiffré — fichiers</h2>
             <p class="ref-note">Chiffre vos fichiers dans le navigateur (AES-256-GCM par entrée, manifest chiffré, HMAC-SHA256 global — format inspiré de <code>vault_lib.py</code>). Aucun fichier ni passphrase n'est transmis au serveur.</p>
-            <div class="enc-info-box"><b>Avertissement :</b> vos fichiers sont chiffrés localement. Conservez votre passphrase — sans elle, les fichiers sont irrécupérables.</div>
+            <div class="enc-info-box"><b>Avertissement :</b> vos fichiers sont chiffrés localement. Conservez votre passphrase — sans elle, les fichiers sont irrécupérables. Dérivation de clé : PBKDF2-SHA256 (300 000 itérations), moins résistante au brute-force GPU/ASIC que l'Argon2id de la CLI Python — pour une utilisation sensible en production, préférer <code>secu-box vault</code> (voir À propos).</div>
             <label class="enc-label">Passphrase du vault</label>
             <input type="password" class="enc-input" id="vault-passphrase" placeholder="Passphrase du vault" autocomplete="off">
             <div class="enc-row">
@@ -434,7 +434,7 @@
               <b>4. Chiffrement fichier</b> — SPN géométrique (Ref256+Ref360) en couche de diversification de clé, AES-256-GCM en couche de chiffrement authentifié (voir l'onglet Chiffrement).<br><br>
               <b>5. Référents 256 et 360</b> — les tables de formes géométriques (croix ansée, Jacquard) qui alimentent les quatre composants ci-dessus.<br><br>
               <b>Note sur les substitutions de chiffrement :</b> la référence Python (<code>secu_box.py</code>, <code>vault_lib.py</code>, <code>disk_lib.py</code>) utilise XChaCha20-Poly1305, absent de l'API Web Crypto des navigateurs. AES-256-GCM lui est substitué dans cette page — même classe de garantie (AEAD, 256 bits, standard audité) via l'implémentation native du navigateur plutôt qu'une implémentation ChaCha20 maison. X25519 est en revanche implémenté nativement et identiquement des deux côtés.<br><br>
-              <b>Écart connu — dérivation de clé du Vault :</b> depuis sa version 1.2, <code>vault_lib.py</code> utilise Argon2id (memory-hard, résistant GPU/ASIC) au lieu de PBKDF2 pour sa dérivation de clé interne. Les navigateurs n'ont ni Argon2id ni scrypt en natif — contrairement aux cas ci-dessus, il n'existe pas d'équivalent Web Crypto à substituer sans ajouter une dépendance externe. Le Vault de cette page reste donc sur PBKDF2 (300 000 itérations) et, de ce fait, moins résistant au brute-force par GPU/ASIC que son homologue Python.<br><br>
+              <b>Écart connu — dérivation de clé du Vault :</b> depuis sa version 1.2, <code>vault_lib.py</code> utilise Argon2id (memory-hard, résistant GPU/ASIC) au lieu de PBKDF2 pour sa dérivation de clé interne. Les navigateurs n'ont ni Argon2id ni scrypt en natif — contrairement aux cas ci-dessus, il n'existe pas d'équivalent Web Crypto à substituer sans ajouter une dépendance externe. Le Vault de cette page reste donc sur PBKDF2 (300 000 itérations) et, de ce fait, moins résistant au brute-force par GPU/ASIC que son homologue Python. Pour une utilisation sensible en production, préférer la CLI Python (<code>secu-box vault</code>).<br><br>
               <b>Avertissement général :</b> SecuBox est un système expérimental basé sur des constructions géométriques originales. La couche cryptographique (AES-256-GCM, X25519, HKDF, PBKDF2) est standard et auditée. La couche géométrique (La Livrée d'Hermès) est en cours d'évaluation formelle — voir l'audit cryptologique externe du 2026-09-10 mentionné dans les onglets Chiffrement et Déchiffrer.
             </div>
           </div>
@@ -1358,14 +1358,10 @@
   // entrées et MAC ont chacun leur propre clé dérivée par HKDF-SHA256
   // depuis le sel interne du vault (aléatoire, embarqué dans le fichier).
   //
-  // ÉCART CONNU vs vault_lib.py v1.2 : la référence Python remplace PBKDF2
-  // par Argon2id (memory-hard, résistant GPU/ASIC) pour la dérivation
-  // interne des sous-clés. L'API Web Crypto des navigateurs n'a ni Argon2id
-  // ni scrypt en natif — contrairement à AES-256-GCM (pour XChaCha20) ou
-  // X25519 (natif), il n'existe pas d'équivalent natif à substituer ici.
-  // Décision explicite : garder PBKDF2 plutôt que d'ajouter une dépendance
-  // externe (bibliothèque Argon2id en WebAssembly) — ce vault JS reste donc
-  // moins résistant au brute-force par GPU/ASIC que son homologue Python.
+  // KDF : PBKDF2-SHA256 (300 000 itérations) — WebCrypto natif.
+  // Note : vault_lib.py v1.2 utilise Argon2id (memory-hard, GPU-resistant).
+  // WebCrypto n'expose pas d'équivalent natif Argon2id ou scrypt.
+  // Pour une utilisation sensible en production, préférer la CLI Python.
   // ============================================================
   const VAULT_MAGIC = new Uint8Array([0x53,0x42,0x56,0x54]); // "SBVT"
   const VAULT_VERSION = 1;
