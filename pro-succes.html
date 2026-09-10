@@ -48,6 +48,14 @@
     statusEl.textContent = "Aucune session de paiement trouvée dans le lien.";
     return;
   }
+  // Déjà réclamé sur cet appareil : inutile de redemander le jeton au
+  // serveur — un rechargement de cette page ne doit pas consommer la
+  // fenêtre de récupération ni afficher une erreur trompeuse.
+  if(localStorage.getItem('pro_token')){
+    statusEl.style.display = 'none';
+    doneEl.style.display = 'block';
+    return;
+  }
   try{
     const res = await fetch(`${WORKER_BASE_URL}/claim-token?session_id=${encodeURIComponent(sessionId)}`);
     const data = await res.json();
