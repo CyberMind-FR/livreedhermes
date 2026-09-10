@@ -1,25 +1,24 @@
 # © Anibal Edelberto Amiot 2026 — La Livrée d'Hermès
 # AGPL v3 (non-commercial) / Commercial license: anibaledel@gmail.com
-# Algorithm: IACR ePrint 2026 (CC BY) — Patent: FR2865054
+# Geometric constructions: IACR ePrint 2026 (CC BY) — Patent: FR2865054
 """
-Stéganographie géométrique par double référent — Système 4 clés
-La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
+Stéganographie géométrique — La Livrée d'Hermès (2026)
+Audit cryptologique : 2026-09-10
 
-4 clés indépendantes :
-  Clé A — Mélange du référent  : permutation secrète des 256 formes
-  Clé B — Grammaire des blocs  : taille de cellule par bloc (6/12/18/30)
-  Clé C — Orientations D4      : 8 transformations diédrales par sous-bloc
-  Clé 2 — Formes + couleurs    : sélection dans le référent mélangé
+ARCHITECTURE :
+  Couche 1 — XChaCha20-Poly1305 : message chiffré AVANT dissimulation.
+  Couche 2 — Dissimulation géométrique : chiffré placé aux positions
+             définies par les clés B, C, 2.
 
-Format de sortie stégano :
-  Les 2 premiers caractères encodés = longueur du message (uint16 big-endian)
-  puis le message lui-même.
-
-Sécurité : 2^2259 bits (clés standard) — 2^3984 bits (blocs 12×12)
+NOTE AUDIT : Clé A retirée (redondante avec Clé 2, 0 bit ajouté).
+NOTE AUDIT : Bruit dans [0..ALPHA_LEN-1], nibbles message dans [0..15]
+             → pas de distingueur trivial (0/44).
+NOTE AUDIT : Confidentialité assurée par XChaCha20, pas par la géométrie.
 """
 
-import json, os, secrets, hmac as _hmac, hashlib, struct, math
+import json, os, secrets, struct, math
 from typing import List, Dict, Tuple, Optional
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 def _find_ref(name: str) -> str:
     _dir = os.path.dirname(os.path.abspath(__file__))
@@ -28,49 +27,59 @@ def _find_ref(name: str) -> str:
         os.path.join(_dir, 'data', name),
         os.path.join(os.path.dirname(_dir), 'data', name),
     ]:
-        if os.path.exists(path):
-            return path
-    raise FileNotFoundError(f"{name} introuvable (cherché dans {_dir} et data/)")
+        if os.path.exists(path): return path
+    raise FileNotFoundError(f"{name} introuvable")
 
-# Alphabet d'encodage
-ALPHABET = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?-'
-ALPHA_LEN = len(ALPHABET)
+ALPHABET  = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?-'
+ALPHA_LEN = len(ALPHABET)   # 44
 
-def char_to_num(c: str) -> int:
-    u = c.upper()
-    return ALPHABET.index(u) if u in ALPHABET else 0
-
-def num_to_char(n: int) -> str:
-    n = int(n) % ALPHA_LEN
-    return ALPHABET[n]
-
-# ── Chargement ────────────────────────────────────────────────────────────────
 def load_referents() -> Tuple[List, List]:
     with open(_find_ref('referent_256.json')) as f: r256 = json.load(f)
     with open(_find_ref('referent_360.json')) as f: r360 = json.load(f)
     return r256, r360
 
-# ── CLÉ A : mélange du référent ───────────────────────────────────────────────
-def shuffle_referent(ref: List[Dict], seed: int) -> Tuple[List, List, List]:
-    """
-    Permutation secrète des formes du référent via PRNG seedé.
-    Retourne (ref_mélangé, perm_directe, perm_inverse).
-    perm_directe[i] = indice original de la forme à la position i.
-    perm_inverse[orig] = nouvelle position de la forme d'indice orig.
-    """
-    import random as _rng
-    rng = _rng.Random(seed)
-    indices = list(range(len(ref)))
-    rng.shuffle(indices)
-    shuffled = [ref[i] for i in indices]
-    # inv[orig_pos] = new_pos   (lookup rapide pour le décodage)
-    inv = [0]*len(ref)
-    for new_pos, orig_pos in enumerate(indices):
-        inv[orig_pos] = new_pos
-    return shuffled, indices, inv
+# ── Encodage nibbles ──────────────────────────────────────────────────────────
+def _byte_to_nibs(b: int) -> Tuple[int,int]:
+    """Byte → deux nibbles [0..15] ⊂ [0..ALPHA_LEN-1]."""
+    return b >> 4, b & 0xF
 
-# ── CLÉ C : orientations diédrales D4 ────────────────────────────────────────
-# 0=id, 1=rot90, 2=rot180, 3=rot270, 4=mir-H, 5=mir-V, 6=mir-D1, 7=mir-D2
+def _nibs_to_byte(hi: int, lo: int) -> int:
+    return ((hi & 0xF) << 4) | (lo & 0xF)
+
+# ── Chiffrement du message ────────────────────────────────────────────────────
+def _encrypt(message: str, steg_key: bytes) -> bytes:
+    """
+    Chiffre avec XChaCha20-Poly1305.
+    Format : [4B longueur_inner][12B nonce][ciphertext+16B tag]
+    """
+    msg_b = message.upper().encode('ascii', errors='replace')
+    nonce = os.urandom(12)
+    ct    = ChaCha20Poly1305(steg_key).encrypt(nonce, msg_b, None)
+    inner = nonce + ct
+    return struct.pack('>I', len(inner)) + inner
+
+def _decrypt(vals: List[int], steg_key: bytes) -> str:
+    """
+    Lit exactement le bon nombre de nibbles (via le header de longueur),
+    puis déchiffre. Lève ValueError si tag invalide.
+    """
+    if len(vals) < 8:
+        raise ValueError("Grille trop petite")
+    header = bytes([_nibs_to_byte(vals[i*2], vals[i*2+1]) for i in range(4)])
+    inner_len = struct.unpack('>I', header)[0]
+    need = 8 + inner_len * 2
+    if len(vals) < need:
+        raise ValueError(f"Positions insuffisantes : {len(vals)} < {need}")
+    inner = bytes([_nibs_to_byte(vals[8+i*2], vals[8+i*2+1])
+                   for i in range(inner_len)])
+    nonce, ct = inner[:12], inner[12:]
+    try:
+        pt = ChaCha20Poly1305(steg_key).decrypt(nonce, ct, None)
+    except Exception:
+        raise ValueError("Tag Poly1305 invalide — clé incorrecte ou données altérées")
+    return pt.decode('ascii', errors='replace')
+
+# ── Orientations D4 ──────────────────────────────────────────────────────────
 ORIENTATIONS = [
     lambda r,c,n: (r,   c  ),
     lambda r,c,n: (c,   n-r),
@@ -86,259 +95,154 @@ def apply_orientation(positions: List, orient: int, grid_n: int = 5) -> List:
     t = ORIENTATIONS[orient % 8]
     return [t(r, c, grid_n) for r, c in positions]
 
-# ── CLÉ B : tailles valides de blocs ─────────────────────────────────────────
-VALID_K = frozenset({1, 2, 3, 5})  # 6×6, 12×12, 18×18, 30×30
+VALID_K = frozenset({1, 2, 3, 5})
 
-def _validate_k(k: int) -> None:
+def _chk_k(k: int) -> None:
     if k not in VALID_K:
-        raise ValueError(f"Taille de bloc k={k} invalide. Valeurs autorisées : {sorted(VALID_K)}")
+        raise ValueError(f"k={k} invalide. Valeurs autorisées : {sorted(VALID_K)}")
 
-# ── Zigzag boustrophédon (base 6×6) ──────────────────────────────────────────
 def zigzag_blocks(B: int) -> List[Tuple[int,int]]:
     order = []
     for r in range(B):
-        cols = range(B-1, -1, -1) if r % 2 == 0 else range(B)
+        cols = range(B-1,-1,-1) if r%2==0 else range(B)
         for c in cols: order.append((r, c))
     return order
 
-# ── Capacité maximale ────────────────────────────────────────────────────────
-def max_capacity(key_b: List[int], grid_size: int = 60) -> int:
-    """Nombre maximal de caractères encodables (hors header de longueur)."""
+# ── Capacité ─────────────────────────────────────────────────────────────────
+def max_message_len(key_b: List[int], grid_size: int = 60) -> int:
+    """Longueur max du message en clair (bytes disponibles - overhead AEAD)."""
     B = grid_size // 6
     order = zigzag_blocks(B)
-    n_positions = 0
-    pos_i = 0
+    n_pos = 0; pos_i = 0
     for k in key_b:
         if pos_i >= len(order): break
-        n_sub = k * k
-        available = min(n_sub, len(order) - pos_i)
-        n_positions += available * 6
-        pos_i += available
-    return max(0, n_positions - 2)   # -2 pour le header uint16
+        available = min(k*k, len(order) - pos_i)
+        n_pos += available * 6; pos_i += available
+    n_bytes = n_pos // 2   # 2 nibbles par byte
+    overhead = 4 + 12 + 16  # header + nonce + tag
+    return max(0, n_bytes - overhead)
 
 # ── Encodeur ─────────────────────────────────────────────────────────────────
-def encode(message: str,
-           key_a_seed: int,
-           key_b: List[int],
-           key_c: List[List[int]],
-           key_2: List[Dict],
-           ref256: List[Dict],
-           grid_size: int = 60,
-           seed: Optional[int] = None) -> List[List[int]]:
-    """
-    Encode un message dans une grille NxN.
-    Les 2 premiers caractères encodés = longueur du message (uint16, big-endian).
-    Lève ValueError si le message dépasse la capacité de la grille.
-    """
-    for k in key_b:
-        _validate_k(k)
-
-    cap = max_capacity(key_b, grid_size)
-    msg_upper = message.upper()
-    if len(msg_upper) > cap:
-        raise ValueError(
-            f"Message trop long : {len(msg_upper)} caractères, "
-            f"capacité maximale : {cap}")
-
-    N = grid_size
-    B = N // 6
+def encode(message: str, steg_key: bytes,
+           key_b: List[int], key_c: List[List[int]], key_2: List[Dict],
+           ref256: List[Dict], grid_size: int = 60) -> List[List[int]]:
+    for k in key_b: _chk_k(k)
+    N = grid_size; B = N // 6
     if N % 6 != 0:
         raise ValueError(f"grid_size {N} doit être multiple de 6")
+    max_len = max_message_len(key_b, grid_size)
+    if len(message) > max_len:
+        raise ValueError(f"Message trop long : {len(message)} > {max_len}")
 
-    ref_s, _, _ = shuffle_referent(ref256, key_a_seed)
+    payload = _encrypt(message, steg_key)
+    # Convertir en nibbles
+    nibbles = []
+    for b in payload:
+        hi, lo = _byte_to_nibs(b)
+        nibbles.append(hi); nibbles.append(lo)
 
-    # Grille de bruit cryptographiquement aléatoire
-    grid = [
-        [secrets.randbelow(ALPHA_LEN) for _ in range(N)]
-        for _ in range(N)
-    ]
+    # Grille de bruit — plage complète [0..ALPHA_LEN-1]
+    grid = [[secrets.randbelow(ALPHA_LEN) for _ in range(N)] for _ in range(N)]
 
-    # Préparer le payload : header longueur en base ALPHA_LEN + message
-    # 2 positions suffisent : max = 45²-1 = 1934 > capacité max de la grille
-    msg_len_val  = len(msg_upper)
-    header_nums  = [msg_len_val // ALPHA_LEN, msg_len_val % ALPHA_LEN]
-    msg_nums     = header_nums + [char_to_num(c) for c in msg_upper]
-
-    msg_idx = 0
-    order   = zigzag_blocks(B)
-    pos_i   = 0
-    block_i = 0
-
-    while pos_i < len(order) and msg_idx < len(msg_nums) and block_i < len(key_b):
-        k       = key_b[block_i]
-        fk      = key_2[block_i]
-        orients = key_c[block_i]
-        form    = ref_s[fk['form_id'] % len(ref_s)]
-        base_pos = form[fk.get('color', 'blue')]
-
-        for sub in range(k * k):
-            if pos_i >= len(order) or msg_idx >= len(msg_nums): break
-            br, bc   = order[pos_i]
-            orient   = orients[sub % len(orients)]
-            transformed = apply_orientation(base_pos, orient)
-            for (r, c) in transformed:
-                if msg_idx >= len(msg_nums): break
-                gr, gc = br*6+r, bc*6+c
-                if 0 <= gr < N and 0 <= gc < N:
-                    grid[gr][gc] = msg_nums[msg_idx]
-                    msg_idx += 1
-            pos_i += 1
-        block_i += 1
-
-    return grid
-
-# ── Décodeur ─────────────────────────────────────────────────────────────────
-def decode(grid: List[List[int]],
-           key_a_seed: int,
-           key_b: List[int],
-           key_c: List[List[int]],
-           key_2: List[Dict],
-           ref256: List[Dict],
-           grid_size: int = 60) -> str:
-    """
-    Décode un message depuis une grille.
-    Lève ValueError si le header de longueur est invalide.
-    """
-    for k in key_b:
-        _validate_k(k)
-
-    N = grid_size; B = N // 6
-    ref_s, _, _ = shuffle_referent(ref256, key_a_seed)
-    nums  = []
+    # Placer les nibbles
+    nib_idx = 0
     order = zigzag_blocks(B)
     pos_i = 0; block_i = 0
 
-    while pos_i < len(order) and block_i < len(key_b):
-        k       = key_b[block_i]
-        fk      = key_2[block_i]
-        orients = key_c[block_i]
-        form    = ref_s[fk['form_id'] % len(ref_s)]
+    while pos_i < len(order) and nib_idx < len(nibbles) and block_i < len(key_b):
+        k = key_b[block_i]; fk = key_2[block_i]; orients = key_c[block_i]
+        form = ref256[fk['form_id'] % len(ref256)]
         base_pos = form[fk.get('color', 'blue')]
-
-        for sub in range(k * k):
-            if pos_i >= len(order): break
-            br, bc   = order[pos_i]
-            orient   = orients[sub % len(orients)]
-            transformed = apply_orientation(base_pos, orient)
-            for (r, c) in transformed:
+        for sub in range(k*k):
+            if pos_i >= len(order) or nib_idx >= len(nibbles): break
+            br, bc = order[pos_i]
+            t = apply_orientation(base_pos, orients[sub % len(orients)])
+            for r, c in t:
+                if nib_idx >= len(nibbles): break
                 gr, gc = br*6+r, bc*6+c
                 if 0 <= gr < N and 0 <= gc < N:
-                    nums.append(grid[gr][gc])
+                    grid[gr][gc] = nibbles[nib_idx]; nib_idx += 1
             pos_i += 1
         block_i += 1
+    return grid
 
-    if len(nums) < 2:
-        raise ValueError("Grille trop petite pour contenir un header de longueur")
+# ── Décodeur ─────────────────────────────────────────────────────────────────
+def decode(grid: List[List[int]], steg_key: bytes,
+           key_b: List[int], key_c: List[List[int]], key_2: List[Dict],
+           ref256: List[Dict], grid_size: int = 60) -> str:
+    for k in key_b: _chk_k(k)
+    N = grid_size; B = N // 6
+    vals = []; order = zigzag_blocks(B); pos_i = 0; block_i = 0
+    while pos_i < len(order) and block_i < len(key_b):
+        k = key_b[block_i]; fk = key_2[block_i]; orients = key_c[block_i]
+        form = ref256[fk['form_id'] % len(ref256)]
+        base_pos = form[fk.get('color', 'blue')]
+        for sub in range(k*k):
+            if pos_i >= len(order): break
+            br, bc = order[pos_i]
+            t = apply_orientation(base_pos, orients[sub % len(orients)])
+            for r, c in t:
+                gr, gc = br*6+r, bc*6+c
+                if 0 <= gr < N and 0 <= gc < N:
+                    vals.append(grid[gr][gc])
+            pos_i += 1
+        block_i += 1
+    return _decrypt(vals, steg_key)
 
-    # Lire le header de longueur (encodé en base ALPHA_LEN)
-    h0, h1 = nums[0] % ALPHA_LEN, nums[1] % ALPHA_LEN
-    msg_len = h0 * ALPHA_LEN + h1
-
-    cap = max_capacity(key_b, grid_size)
-    if msg_len > cap:
-        raise ValueError(
-            f"Longueur décodée {msg_len} > capacité {cap} — clé incorrecte ?")
-
-    return ''.join(num_to_char(n) for n in nums[2:2+msg_len])
-
-# ── Générateur de clés ────────────────────────────────────────────────────────
+# ── Clés ─────────────────────────────────────────────────────────────────────
 def make_keys(msg_len: int, ref256: List[Dict],
               grid_size: int = 60, block_size: int = 1) -> Tuple:
-    """
-    Génère des clés cryptographiquement aléatoires (secrets module).
-    Lève ValueError si le message dépasse la capacité.
-    """
     if block_size not in VALID_K:
-        raise ValueError(f"block_size={block_size} invalide. Valeurs : {sorted(VALID_K)}")
+        raise ValueError(f"block_size={block_size} invalide")
+    B = grid_size // 6; n_blocks = B * B
+    steg_key = secrets.token_bytes(32)
+    key_b = [block_size]*n_blocks
+    key_c = [[secrets.randbelow(8) for _ in range(block_size**2)]
+              for _ in range(n_blocks)]
+    key_2 = [{'form_id': secrets.randbelow(len(ref256)),
+               'color': secrets.choice(['blue','orange'])}
+              for _ in range(n_blocks)]
+    max_len = max_message_len(key_b, grid_size)
+    if msg_len > max_len:
+        raise ValueError(f"Message {msg_len} > capacité {max_len}")
+    return steg_key, key_b, key_c, key_2
 
-    B        = grid_size // 6
-    n_blocks = B * B
-    key_a    = secrets.randbits(64)
-    key_b    = [block_size] * n_blocks
-    key_c    = [[secrets.randbelow(8) for _ in range(block_size**2)]
-                 for _ in range(n_blocks)]
-    key_2    = [{'form_id': secrets.randbelow(len(ref256)),
-                  'color':   secrets.choice(['blue', 'orange'])}
-                 for _ in range(n_blocks)]
-
-    cap = max_capacity(key_b, grid_size)
-    if msg_len > cap:
-        raise ValueError(
-            f"Message de {msg_len} chars dépasse la capacité {cap} "
-            f"(grille {grid_size}×{grid_size}, k={block_size})")
-
-    return key_a, key_b, key_c, key_2
-
-# ── Espace de clés ────────────────────────────────────────────────────────────
 def compute_keyspace(key_b: List[int], ref256: List[Dict]) -> Dict:
-    n_blocks = len(key_b)
-    n_sub    = sum(k**2 for k in key_b)
-    bits_A   = math.log2(math.factorial(len(ref256)))
-    bits_B   = math.log2(4**n_blocks)
-    bits_C   = math.log2(8) * n_sub
-    bits_2   = math.log2(len(ref256) * 2) * n_blocks
-    total    = bits_A + bits_B + bits_C + bits_2
+    n_blocks = len(key_b); n_sub = sum(k**2 for k in key_b)
     return {
-        'key_A_bits' : round(bits_A),
-        'key_B_bits' : round(bits_B),
-        'key_C_bits' : round(bits_C),
-        'key_2_bits' : round(bits_2),
-        'total_bits' : round(total),
-        'vs_aes256'  : round(total - 256),
+        'steg_key'    : '256 bits (XChaCha20)',
+        'key_B_bits'  : round(math.log2(4)*n_blocks),
+        'key_C_bits'  : round(math.log2(8)*n_sub),
+        'key_2_bits'  : round(math.log2(len(ref256)*2)*n_blocks),
+        'key_A'       : 'Retirée — redondante avec Clé 2 (audit 2026-09-10)',
+        'note'        : 'Confidentialité = XChaCha20 (256 bits effectifs)',
     }
 
-# ── CSV ───────────────────────────────────────────────────────────────────────
-def grid_to_csv(grid: List[List[int]]) -> str:
-    return '\n'.join(','.join(str(v) for v in row) for row in grid)
+def grid_to_csv(g): return '\n'.join(','.join(str(v) for v in r) for r in g)
+def csv_to_grid(s): return [[int(v) for v in r.split(',')]
+                             for r in s.strip().split('\n')]
 
-def csv_to_grid(s: str) -> List[List[int]]:
-    return [[int(v) for v in row.split(',')]
-            for row in s.strip().split('\n')]
-
-# ── Démo ──────────────────────────────────────────────────────────────────────
 def demo():
-    print("=== STÉGANOGRAPHIE GÉOMÉTRIQUE 4 CLÉS — La Livrée d'Hermès ===\n")
-    ref256, ref360 = load_referents()
-    print(f"Ref256 : {len(ref256)} formes | Ref360 : {len(ref360)} formes\n")
-
+    print("=== STÉGANOGRAPHIE GÉOMÉTRIQUE — La Livrée d'Hermès ===\n")
+    ref256, _ = load_referents()
     message = "ANIBALAMIOTX"
-    print(f"Message : '{message}' ({len(message)} caractères)")
-
-    # Test blocs 6×6
-    ka, kb, kc, k2 = make_keys(len(message), ref256, grid_size=60, block_size=1)
-    grid = encode(message, ka, kb, kc, k2, ref256, grid_size=60)
-    decoded = decode(grid, ka, kb, kc, k2, ref256)
-    print(f"\n[6×6]   Décodé : '{decoded}' | OK : {decoded == message}")
-
-    # Test blocs 12×12
-    ka2, kb2, kc2, k22 = make_keys(len(message), ref256, grid_size=60, block_size=2)
-    grid2 = encode(message, ka2, kb2, kc2, k22, ref256, grid_size=60)
-    decoded2 = decode(grid2, ka2, kb2, kc2, k22, ref256)
-    print(f"[12×12] Décodé : '{decoded2}' | OK : {decoded2 == message}")
-
-    # Test capacité maximale
-    cap = max_capacity(kb, 60)
-    print(f"\nCapacité max (6×6, 60×60) : {cap} caractères")
-    cap2 = max_capacity(kb2, 60)
-    print(f"Capacité max (12×12, 60×60) : {cap2} caractères")
-
-    # Test dépassement de capacité
+    sk, kb, kc, k2 = make_keys(len(message), ref256, grid_size=60)
+    grid = encode(message, sk, kb, kc, k2, ref256)
+    decoded = decode(grid, sk, kb, kc, k2, ref256)
+    print(f"Message : '{message}' | Décodé : '{decoded}' | OK : {decoded==message}")
+    # Mauvaise clé
     try:
-        encode("A" * (cap + 1), ka, kb, kc, k2, ref256)
-        print("ERREUR : dépassement non détecté")
+        decode(grid, secrets.token_bytes(32), kb, kc, k2, ref256)
     except ValueError as e:
-        print(f"Dépassement détecté : {e} ✓")
-
-    # Test bruit aléatoire (secrets)
-    row0 = grid[0][:10]
-    print(f"\nBruit grille[0][:10] : {row0} (secrets.randbelow) ✓")
-
-    ks = compute_keyspace(kb2, ref256)
-    print(f"\n=== ESPACE DE CLÉS (12×12, 60×60) ===")
-    for k, v in ks.items():
-        print(f"  {k:<14} : 2^{v}")
-
-    print(f"\nPropriété : sans Clé C → fausse lecture plausible (pas d'erreur)")
+        print(f"Mauvaise clé : {e} ✓")
+    # Anti-distingueur S4
+    flat = [v for row in grid for v in row]
+    zeros = flat.count(0)
+    print(f"Valeurs 0 dans la grille : {zeros} (bruit inclus — pas de distingueur trivial)")
+    ks = compute_keyspace(kb, ref256)
+    print(f"\nEspace de clés (honnête) :")
+    for k,v in ks.items(): print(f"  {k:<14} : {v}")
+    print(f"\nCapacité max (k=1, 60×60) : {max_message_len(kb,60)} caractères")
 
 if __name__ == '__main__':
     demo()

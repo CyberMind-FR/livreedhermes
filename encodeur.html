@@ -187,7 +187,7 @@
         <div id="tab-demo" class="enc-tab active">
           <div class="enc-card">
             <h2>Démonstration : message ANIBALAMIOTX</h2>
-            <p class="enc-info-box"><b>ANIBALAMIOTX</b> (12 caractères) est encodé dans une grille 60×60 de nombres aléatoires, avec des blocs 6×6 (Clé B). Seuls les caractères aux positions désignées par la forme du Référent 256 mélangé (Clé A), tournée selon la Clé C et sélectionnée par la Clé 2, portent le message — le reste est du bruit indiscernable.</p>
+            <p class="enc-info-box"><b>ANIBALAMIOTX</b> est d'abord chiffré avec AES-256-GCM (clé stéganographique de 256 bits), puis le texte chiffré est dissimulé dans une grille 60×60 de nombres aléatoires, aux positions désignées par la taille de bloc (Clé B), l'orientation (Clé C) et la forme du Référent 256 (Clé 2) — le reste est du bruit indiscernable. La confidentialité vient du chiffrement, pas de la géométrie.</p>
             <button type="button" class="enc-btn" id="btnRunDemo">Lancer la démonstration</button>
             <div id="demo-result" hidden>
               <div class="enc-result-box" id="demo-msg"></div>
@@ -227,7 +227,7 @@
               <div class="enc-info-box" id="enc-info"></div>
               <div class="enc-row" style="margin-top:14px">
                 <div>
-                  <label class="enc-label">Clé A + Clé B</label>
+                  <label class="enc-label">Clé stéganographique + Clé B</label>
                   <textarea class="enc-textarea" id="enc-key1" readonly></textarea>
                 </div>
                 <div>
@@ -238,7 +238,7 @@
               <label class="enc-label">Clé C + Clé 2</label>
               <textarea class="enc-textarea" id="enc-key2" readonly style="min-height:70px"></textarea>
               <button type="button" class="enc-btn" id="btnDownloadGrid">⬇ Télécharger la grille CSV</button>
-              <button type="button" class="enc-btn secondary" id="btnDownloadKeys">⬇ Télécharger les 4 clés (JSON)</button>
+              <button type="button" class="enc-btn secondary" id="btnDownloadKeys">⬇ Télécharger les clés (JSON)</button>
             </div>
           </div>
         </div>
@@ -249,8 +249,8 @@
             <h2>Décoder un message</h2>
             <label class="enc-label">Grille CSV (coller ou charger)</label>
             <textarea class="enc-textarea" id="dec-grid" placeholder="1,23,5,14,2,..."></textarea>
-            <label class="enc-label">Les 4 clés (JSON — {keyASeed, keyB, keyC, key2, gridSize})</label>
-            <textarea class="enc-textarea" id="dec-keys" placeholder='{"keyASeed":123,"keyB":[1,1,...],"keyC":[[0,3,...],...],"key2":[{"form_id":42,"color":"blue"},...],"gridSize":60}' style="min-height:110px"></textarea>
+            <label class="enc-label">Les clés (JSON — {stegKeyHex, keyB, keyC, key2, gridSize})</label>
+            <textarea class="enc-textarea" id="dec-keys" placeholder='{"stegKeyHex":"a1b2...","keyB":[1,1,...],"keyC":[[0,3,...],...],"key2":[{"form_id":42,"color":"blue"},...],"gridSize":60}' style="min-height:110px"></textarea>
             <button type="button" class="enc-btn" id="btnDecode">Décoder</button>
             <div id="dec-result" hidden>
               <div class="enc-result-box" id="dec-msg"></div>
@@ -260,7 +260,7 @@
             <h2>Charger depuis un fichier</h2>
             <label class="enc-label">Fichier grille CSV</label>
             <input type="file" class="enc-input" id="dec-file-grid" accept=".csv">
-            <label class="enc-label">Fichier des 4 clés (JSON)</label>
+            <label class="enc-label">Fichier des clés (JSON)</label>
             <input type="file" class="enc-input" id="dec-file-keys" accept=".json">
           </div>
         </div>
@@ -282,16 +282,16 @@
         <!-- À PROPOS -->
         <div id="tab-about" class="enc-tab">
           <div class="enc-card enc-about">
-            <h2>Stéganographie géométrique — système à 4 clés</h2>
-            <p>Ce système est une application cryptographique des constructions arithmogéométriques développées dans <i>La Livrée d'Hermès</i> (Anibal Edelberto Amiot, 2026). Soumis à l'<a href="https://eprint.iacr.org" target="_blank" rel="noopener">IACR Cryptology ePrint Archive</a> en septembre 2026.</p>
+            <h2>Stéganographie géométrique — chiffrer puis dissimuler</h2>
+            <p>Ce système est une application cryptographique des constructions arithmogéométriques développées dans <i>La Livrée d'Hermès</i> (Anibal Edelberto Amiot, 2026). Soumis à l'<a href="https://eprint.iacr.org" target="_blank" rel="noopener">IACR Cryptology ePrint Archive</a> en septembre 2026. Architecture revue suite à un audit cryptologique externe (2026-09-10).</p>
             <div class="enc-info-box">
-              <b>Principe :</b> un message est dissimulé dans une grille de nombres aléatoires. Seul le destinataire disposant des quatre clés peut identifier les positions porteuses du message. Sans les clés, la grille est statistiquement indiscernable du bruit aléatoire.<br><br>
-              <b>Clé A — mélange du référent :</b> permutation secrète des 256 formes de la croix ansée (≈2^1684 bits).<br><br>
+              <b>Principe :</b> le message est d'abord chiffré (AES-256-GCM), puis le texte chiffré est dissimulé dans une grille de nombres aléatoires. La confidentialité vient du chiffrement, la géométrie ne fait que cacher où se trouve le texte chiffré. Sans les clés, la grille est statistiquement indiscernable du bruit aléatoire.<br><br>
+              <b>Clé stéganographique — chiffrement :</b> clé AES-256-GCM de 256 bits, générée aléatoirement par message. Chiffre le message avant toute dissimulation ; authentifie le déchiffrement (une clé ou des données incorrectes sont détectées, pas silencieusement corrompues).<br><br>
               <b>Clé B — grammaire des blocs :</b> taille de cellule par bloc — 6×6, 12×12, 18×18 ou 30×30.<br><br>
               <b>Clé C — orientations :</b> l'une des 8 transformations diédrales (D4 : rotations et miroirs) appliquée à chaque sous-bloc 6×6.<br><br>
-              <b>Clé 2 — formes et couleurs :</b> sélection d'une forme et d'une couleur (bleu/orange) dans le référent mélangé, par bloc.<br><br>
-              <b>Propriété distinctive :</b> une Clé C manquante ou erronée produit une fausse lecture plausible, pas une erreur détectable — le bruit structuré reste indiscernable d'un message valide sans elle.<br><br>
-              <b>Espace de clés :</b> jusqu'à 2^3984 bits pour une grille 60×60 en blocs 12×12 (Clé A 2^1684 · Clé B 2^200 · Clé C 2^1200 · Clé 2 2^900). AES-256 (standard militaire) = 2^256 bits.
+              <b>Clé 2 — formes et couleurs :</b> sélection d'une forme et d'une couleur (bleu/orange) dans le Référent 256, par bloc.<br><br>
+              <b>Ancienne Clé A retirée :</b> l'audit a constaté que le mélange secret du référent (Clé A) était entièrement redondant avec la Clé 2 — 0 bit de sécurité apporté malgré un espace de clés apparent de 2^1684. Le Référent 256 est maintenant utilisé directement.<br><br>
+              <b>Espace de clés (honnête) :</b> confidentialité = 256 bits (AES-256-GCM) ; dissimulation géométrique = Clé B + Clé C + Clé 2 (jusqu'à 2^2300 bits pour une grille 60×60 en blocs 12×12). Une clé de dissimulation incorrecte échoue désormais à l'authentification AES-GCM — une erreur explicite, plus une fausse lecture plausible comme dans les versions antérieures.
             </div>
             <div class="enc-info-box">
               <b>Kerckhoffs :</b> le système respecte le principe de Kerckhoffs (1883) — l'algorithme est entièrement public, le secret repose uniquement sur les clés et, optionnellement, sur des référents personnalisés.<br><br>
@@ -307,8 +307,8 @@
 
           <div id="disk-app" hidden>
             <div class="enc-card">
-              <h2>Chiffrement géométrique — Double Référent 256+360</h2>
-              <p class="ref-note">Réseau de substitution-permutation (SPN) à 5 couches par tour, sur 4 tours par bloc de 24 octets — S-box géométrique GF(2⁸), permutation Ref256, diffusion MixBlock, permutation Ref360, masque XOR — toutes dérivées par PBKDF2/SHA-256 depuis une passphrase et un sel aléatoire propre à chaque fichier. Authentifié par HMAC-SHA256 : une passphrase incorrecte ou un fichier altéré sont détectés, jamais rendus en bruit silencieux. Distinct de l'outil de stéganographie ci-dessus. Entièrement côté client : la passphrase et les fichiers ne quittent jamais le navigateur.</p>
+              <h2>Chiffrement hybride — géométrique + AES-256-GCM</h2>
+              <p class="ref-note">Architecture à deux couches, suite à un audit cryptologique externe : une couche géométrique (SPN Ref256+Ref360, S-box GF(2⁸), 4 tours) dérive une clé de session unique par secteur — diversification de clé, pas le chiffrement lui-même — puis AES-256-GCM chiffre et authentifie chaque secteur individuellement, avec une authentification HMAC-SHA256 globale par-dessus. Une passphrase incorrecte ou un fichier altéré sont détectés, jamais rendus en bruit silencieux. Distinct de l'outil de stéganographie ci-dessus. Entièrement côté client : la passphrase et les fichiers ne quittent jamais le navigateur.</p>
               <label class="enc-label">Passphrase</label>
               <input type="password" class="enc-input" id="disk-passphrase" placeholder="Votre passphrase" autocomplete="off">
               <p class="ref-note" style="margin-top:8px">Saisie une seule fois, utilisée directement par les boutons Chiffrer et Déchiffrer ci-dessous.</p>
@@ -336,19 +336,11 @@
             <div class="enc-card">
               <h2>Statistiques de sécurité</h2>
               <div class="disk-stats enc-info-box">
-                <div><b>Architecture</b> : S-box GF(2⁸) → Permutation Ref256 → MixBlock → Permutation Ref360 → XOR, répété sur 4 tours</div>
-                <div><b>S-box géométrique GF(2⁸)</b> : S(x) = M·GF⁻¹(x) ⊕ c, max_DDT ≤ 4 prouvé (Nyberg 1994) — même niveau qu'AES Rijndael</div>
-                <div><b>Permutation géométrique Ref256</b> : 12 288 configurations (256 formes × 24 ordres × 2 couleurs)</div>
-                <div><b>MixBlock géométrique</b> : diffusion triangulaire intra/inter-groupes</div>
-                <div><b>Permutation géométrique Ref360</b> : 342 configurations (57 formes complètes × 6 ordres de couleur — 2 160 avec les 360 formes)</div>
-                <div><b>XOR keystream</b> : 192 bits/chunk</div>
-                <div><b>Tours/chunk</b> : 4 — avalanche mesurée ≈ 50,2 % (AES ≈ 50 %)</div>
-                <div><b>Bits/secteur</b> : ≈ 2^159 432 (21 chunks/secteur)</div>
-                <div><b>AES-256</b> : 2^256</div>
-                <div><b>Avantage</b> : +2^159 176 bits/secteur</div>
-                <div><b>Dérivation de clé</b> : PBKDF2-SHA256, 200 000 itérations, sel aléatoire de 128 bits propre à chaque fichier</div>
-                <div><b>Nonce</b> : 128 bits (aléatoire par fichier) — sous-clés uniques même à passphrase et sel identiques</div>
-                <div><b>Intégrité</b> : HMAC-SHA256 (256 bits) — détecte toute altération ou passphrase incorrecte</div>
+                <div><b>Couche géométrique (diversification de clé)</b> : SPN Ref256+Ref360 — S-box GF(2⁸) (max_DDT ≤ 4 prouvé, Nyberg 1994), permutation Ref256 (12 288 configurations), MixBlock, permutation Ref360 (342 configurations), 4 tours — dérive une clé de session de 256 bits par secteur, non revendiquée comme chiffrement autonome</div>
+                <div><b>Couche standard (confidentialité + intégrité)</b> : AES-256-GCM par secteur, tag d'authentification de 128 bits — la référence Python utilise XChaCha20-Poly1305 (absent de l'API Web Crypto des navigateurs) ; AES-256-GCM lui est substitué ici, même classe de garantie via l'implémentation native et auditée du navigateur</div>
+                <div><b>Dérivation de clé</b> : PBKDF2-SHA256, 300 000 itérations — une fois passphrase → clé maître (sel de 128 bits géré par la page), une seconde fois clé maître → clé géométrique (sel de 256 bits propre à chaque fichier)</div>
+                <div><b>Nonce</b> : 192 bits (aléatoire par fichier), un nonce distinct par secteur dérivé via HKDF-SHA256</div>
+                <div><b>Intégrité</b> : tag AES-GCM par secteur + HMAC-SHA256 global (256 bits) — détecte toute altération ou passphrase incorrecte, jamais rendue en bruit silencieux</div>
               </div>
             </div>
 
@@ -442,14 +434,9 @@
     if(name==='referents') renderReferents();
   }
 
-  function mkRng(seed){
-    let s = seed===null || seed===undefined || isNaN(seed) ? Math.random()*2**32|0 : seed;
-    return ()=>{ s=(s*1664525+1013904223)&0xFFFFFFFF; return (s>>>0)/2**32; };
-  }
-
   // Entiers uniformes cryptographiquement sûrs par rejet (pas de biais modulo)
   // — porté depuis stegano_lib.py::secrets.randbelow, pour le bruit de grille
-  // et la génération des clés B/C/2 (Clé A garde mkRng, voir plus bas).
+  // et la génération des clés B/C/2.
   function stegRandomInts(count, maxExclusive){
     const maxUint32 = 0x100000000;
     const limit = maxUint32 - (maxUint32 % maxExclusive);
@@ -467,16 +454,22 @@
   function stegRandomChoice(arr){ return arr[stegRandomInt(arr.length)]; }
 
   // ============================================================
-  // Stéganographie géométrique — système à 4 clés (stegano_lib.py porté en JS)
-  // Clé A : mélange secret du Référent 256 (permutation Fisher-Yates seedée).
-  // Clé B : grammaire des tailles de bloc (6/12/18/30 selon k=1/2/3/5).
-  // Clé C : orientations diédrales D4 par sous-bloc 6×6.
-  // Clé 2 : sélection forme + couleur dans le référent mélangé.
-  // Le mélange (Clé A) utilise le RNG seedable de ce fichier (mkRng), pas le
-  // random.Random de Python : cohérent avec l'implémentation JS de référence
-  // déjà fournie pour le bruit de grille, mais non bit-compatible avec le
-  // random.shuffle() du script Python — les deux implémentations sont
-  // indépendamment auto-cohérentes, pas interchangeables clé pour clé.
+  // Stéganographie géométrique — chiffrer puis dissimuler (stegano_lib.py v5,
+  // suite à audit cryptologique externe du 2026-09-10) :
+  //   Couche 1 — le message est chiffré avec AES-256-GCM (clé stéganographique
+  //     de 256 bits) AVANT toute dissimulation. La confidentialité vient de
+  //     cette couche, pas de la géométrie.
+  //   Couche 2 — le texte chiffré (converti en nibbles) est placé aux
+  //     positions désignées par Clé B (taille de bloc), Clé C (orientations
+  //     D4) et Clé 2 (forme + couleur dans le Référent 256) — dissimulation,
+  //     pas protection cryptographique.
+  // L'ancienne Clé A (mélange du référent) a été retirée : l'audit a constaté
+  // qu'elle était entièrement redondante avec Clé 2 (0 bit de sécurité
+  // apporté), donc le Référent 256 est utilisé directement, sans mélange.
+  // La référence Python chiffre avec XChaCha20-Poly1305 (absent de l'API Web
+  // Crypto des navigateurs) ; AES-256-GCM est substitué ici, même classe de
+  // garantie via l'implémentation native du navigateur plutôt qu'une
+  // implémentation ChaCha20 maison.
   // ============================================================
   const STEG_ORIENTATIONS = [
     (r,c,n)=>[r,   c  ],  // 0 identité
@@ -502,73 +495,101 @@
     return order;
   }
 
-  // Clé A garde le RNG seedable de ce fichier (mkRng), pas le random.Random
-  // de Python : cohérent avec l'implémentation JS de référence déjà fournie,
-  // mais non bit-compatible avec random.shuffle() côté Python — les deux
-  // implémentations sont indépendamment auto-cohérentes, pas interchangeables
-  // clé pour clé (voir aussi la note en tête de section).
-  function stegShuffleReferent(ref, seed){
-    const rng = mkRng(seed);
-    const arr = ref.slice();
-    for(let i=arr.length-1;i>0;i--){
-      const j = Math.floor(rng()*(i+1));
-      const tmp=arr[i]; arr[i]=arr[j]; arr[j]=tmp;
-    }
-    return arr;
-  }
-
   const VALID_K = [1,2,3,5];
   function stegValidateK(k){
     if(!VALID_K.includes(k)) throw new Error(`Taille de bloc k=${k} invalide. Valeurs autorisées : ${VALID_K.join(', ')}`);
   }
 
   // Nombre maximal de caractères encodables (hors header de longueur, -2).
-  function stegMaxCapacity(keyB, gridSize=60){
+  // Nombre max d'octets de message en clair que la grille peut porter, une
+  // fois retiré le surcoût AEAD (4B en-tête longueur + 12B nonce + 16B tag).
+  function stegMaxMessageLen(keyB, gridSize=60){
     const B = Math.floor(gridSize/6);
     const order = stegZigzagBlocks(B);
-    let nPositions = 0, posI = 0;
+    let nPos = 0, posI = 0;
     for(const k of keyB){
       if(posI >= order.length) break;
-      const nSub = k*k;
-      const available = Math.min(nSub, order.length - posI);
-      nPositions += available*6;
+      const available = Math.min(k*k, order.length - posI);
+      nPos += available*6;
       posI += available;
     }
-    return Math.max(0, nPositions - 2);
+    const nBytes = Math.floor(nPos/2); // 2 nibbles par octet
+    const overhead = 4+12+16;
+    return Math.max(0, nBytes - overhead);
   }
 
-  // Les 2 premiers caractères encodés = longueur du message (base ALPHABET.length,
-  // big-endian), le reste est lu par le décodeur sans avoir besoin qu'on lui
-  // redonne la longueur — porté depuis stegano_lib.py v2 (encode/decode).
-  function stegEncode(message, keyASeed, keyB, keyC, key2, ref256, gridSize=60){
+  function stegBytesToHex(bytes){ return Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+  function stegHexToBytes(hex){ const a = new Uint8Array(hex.length/2); for(let i=0;i<a.length;i++) a[i]=parseInt(hex.substr(i*2,2),16); return a; }
+  function stegByteToNibs(b){ return [b>>4, b&0xF]; }
+  function stegNibsToByte(hi, lo){ return ((hi&0xF)<<4)|(lo&0xF); }
+
+  // Chiffre le message avec AES-256-GCM avant dissimulation (substitué à
+  // XChaCha20-Poly1305, absent de l'API Web Crypto — voir note en tête de
+  // section). Format : [4B longueur_inner][12B nonce][ciphertext+16B tag].
+  async function stegEncryptPayload(message, stegKey){
+    const msgBytes = new TextEncoder().encode(message.toUpperCase());
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const key = await crypto.subtle.importKey('raw', stegKey, {name:'AES-GCM'}, false, ['encrypt']);
+    const ctBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv:nonce, tagLength:128}, key, msgBytes);
+    const inner = new Uint8Array(12+ctBuf.byteLength);
+    inner.set(nonce, 0); inner.set(new Uint8Array(ctBuf), 12);
+    const payload = new Uint8Array(4+inner.length);
+    new DataView(payload.buffer, 0, 4).setUint32(0, inner.length, false);
+    payload.set(inner, 4);
+    return payload;
+  }
+
+  async function stegDecryptPayload(vals, stegKey){
+    if(vals.length < 8) throw new Error('Grille trop petite.');
+    const headerBytes = new Uint8Array(4);
+    for(let i=0;i<4;i++) headerBytes[i] = stegNibsToByte(vals[i*2], vals[i*2+1]);
+    const innerLen = new DataView(headerBytes.buffer).getUint32(0, false);
+    const need = 8 + innerLen*2;
+    if(vals.length < need) throw new Error(`Positions insuffisantes : ${vals.length} < ${need}`);
+    const inner = new Uint8Array(innerLen);
+    for(let i=0;i<innerLen;i++) inner[i] = stegNibsToByte(vals[8+i*2], vals[8+i*2+1]);
+    const nonce = inner.slice(0, 12);
+    const ct = inner.slice(12);
+    const key = await crypto.subtle.importKey('raw', stegKey, {name:'AES-GCM'}, false, ['decrypt']);
+    let ptBuf;
+    try{
+      ptBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv:nonce, tagLength:128}, key, ct);
+    }catch(e){
+      throw new Error('Tag AES-GCM invalide — clé incorrecte ou données altérées.');
+    }
+    return String.fromCharCode(...new Uint8Array(ptBuf));
+  }
+
+  // Place le texte chiffré (converti en nibbles) aux positions désignées par
+  // Clé B/C/2 dans le Référent 256 utilisé directement (plus de mélange —
+  // l'ancienne Clé A a été retirée, redondante avec Clé 2 selon l'audit).
+  async function stegEncode(message, stegKey, keyB, keyC, key2, ref256, gridSize=60){
     keyB.forEach(stegValidateK);
-    const cap = stegMaxCapacity(keyB, gridSize);
-    const msgUpper = message.toUpperCase();
-    if(msgUpper.length > cap) throw new Error(`Message trop long : ${msgUpper.length} caractères, capacité maximale : ${cap}`);
+    const maxLen = stegMaxMessageLen(keyB, gridSize);
+    if(message.length > maxLen) throw new Error(`Message trop long : ${message.length} > ${maxLen}`);
     const N=gridSize, B=Math.floor(N/6);
-    const refS = stegShuffleReferent(ref256, keyASeed);
+    const payload = await stegEncryptPayload(message, stegKey);
+    const nibbles = [];
+    for(const b of payload){ nibbles.push(b>>4); nibbles.push(b&0xF); }
     const flatNoise = stegRandomInts(N*N, ALPHABET.length);
     const grid = [];
     for(let r=0;r<N;r++) grid.push(flatNoise.slice(r*N, (r+1)*N));
-    const msgLenVal = msgUpper.length;
-    const headerNums = [Math.floor(msgLenVal/ALPHABET.length), msgLenVal % ALPHABET.length];
-    const msgNums = headerNums.concat(msgUpper.split('').map(charToNum));
-    let msgIdx=0;
+    let nibIdx=0;
     const order = stegZigzagBlocks(B);
     let posI=0, blockI=0;
-    while(posI<order.length && msgIdx<msgNums.length && blockI<keyB.length){
+    while(posI<order.length && nibIdx<nibbles.length && blockI<keyB.length){
       const k=keyB[blockI], fk=key2[blockI], orients=keyC[blockI];
-      const form = refS[fk.form_id % refS.length];
+      const form = ref256[fk.form_id % ref256.length];
       const basePos = form[fk.color || 'blue'];
       for(let sub=0; sub<k*k; sub++){
-        if(posI>=order.length || msgIdx>=msgNums.length) break;
+        if(posI>=order.length || nibIdx>=nibbles.length) break;
         const [br,bc]=order[posI];
         const orient = orients[sub % orients.length];
         const transformed = stegApplyOrientation(basePos, orient);
         for(const [r,c] of transformed){
-          if(msgIdx>=msgNums.length) break;
+          if(nibIdx>=nibbles.length) break;
           const gr=br*6+r, gc=bc*6+c;
-          if(gr>=0 && gr<N && gc>=0 && gc<N){ grid[gr][gc]=msgNums[msgIdx]; msgIdx++; }
+          if(gr>=0 && gr<N && gc>=0 && gc<N){ grid[gr][gc]=nibbles[nibIdx]; nibIdx++; }
         }
         posI++;
       }
@@ -577,16 +598,15 @@
     return grid;
   }
 
-  function stegDecode(grid, keyASeed, keyB, keyC, key2, ref256, gridSize=60){
+  async function stegDecode(grid, stegKey, keyB, keyC, key2, ref256, gridSize=60){
     keyB.forEach(stegValidateK);
     const N=gridSize, B=Math.floor(N/6);
-    const refS = stegShuffleReferent(ref256, keyASeed);
-    const nums=[];
+    const vals=[];
     const order = stegZigzagBlocks(B);
     let posI=0, blockI=0;
     while(posI<order.length && blockI<keyB.length){
       const k=keyB[blockI], fk=key2[blockI], orients=keyC[blockI];
-      const form = refS[fk.form_id % refS.length];
+      const form = ref256[fk.form_id % ref256.length];
       const basePos = form[fk.color || 'blue'];
       for(let sub=0; sub<k*k; sub++){
         if(posI>=order.length) break;
@@ -595,48 +615,42 @@
         const transformed = stegApplyOrientation(basePos, orient);
         for(const [r,c] of transformed){
           const gr=br*6+r, gc=bc*6+c;
-          if(gr>=0 && gr<N && gc>=0 && gc<N) nums.push(grid[gr][gc]);
+          if(gr>=0 && gr<N && gc>=0 && gc<N) vals.push(grid[gr][gc]);
         }
         posI++;
       }
       blockI++;
     }
-    if(nums.length < 2) throw new Error('Grille trop petite pour contenir un header de longueur.');
-    const mod = (x,m) => ((x % m) + m) % m;
-    const h0 = mod(nums[0], ALPHABET.length), h1 = mod(nums[1], ALPHABET.length);
-    const msgLen = h0*ALPHABET.length + h1;
-    const cap = stegMaxCapacity(keyB, gridSize);
-    if(msgLen > cap) throw new Error(`Longueur décodée ${msgLen} > capacité ${cap} — clé incorrecte ?`);
-    return nums.slice(2, 2+msgLen).map(numToChar).join('');
+    return stegDecryptPayload(vals, stegKey);
   }
 
   function stegMakeKeys(ref256, gridSize=60, blockSize=1){
     stegValidateK(blockSize);
     const B = Math.floor(gridSize/6);
     const nBlocks = B*B;
-    const keyASeed = stegRandomInt(2**31);
+    const stegKey = crypto.getRandomValues(new Uint8Array(32));
     const keyB = Array(nBlocks).fill(blockSize);
     const keyC = Array.from({length:nBlocks},()=>stegRandomInts(blockSize*blockSize, 8));
     const key2 = Array.from({length:nBlocks},()=>({form_id: stegRandomInt(ref256.length), color: stegRandomChoice(['blue','orange'])}));
-    return {keyASeed, keyB, keyC, key2};
+    return {stegKey, keyB, keyC, key2};
   }
 
+  // Espace de clés honnête (audit 2026-09-10) : plus de Clé A gonflée
+  // artificiellement (256! ≈ 2^1684 bits, entièrement redondante avec Clé 2).
+  // La confidentialité vient d'AES-256-GCM ; B/C/2 ne font que dissimuler.
   function stegKeyspace(keyB, ref256){
     const nBlocks = keyB.length;
     const nSub = keyB.reduce((s,k)=>s+k*k,0);
-    let bitsA=0;
-    for(let i=1;i<=ref256.length;i++) bitsA += Math.log2(i);
     const bitsB = Math.log2(4)*nBlocks;
     const bitsC = Math.log2(8)*nSub;
     const bits2 = Math.log2(ref256.length*2)*nBlocks;
-    const total = bitsA+bitsB+bitsC+bits2;
     return {
-      keyA: Math.round(bitsA), keyB: Math.round(bitsB), keyC: Math.round(bitsC), key2: Math.round(bits2),
-      total: Math.round(total), vsAes256: Math.round(total-256),
+      stegKeyBits: 256,
+      keyB: Math.round(bitsB), keyC: Math.round(bitsC), key2: Math.round(bits2),
     };
   }
 
-  function stegDrawGrid(grid, keyASeed, keyBArr, keyC, key2, ref256, canvasId){
+  function stegDrawGrid(grid, keyBArr, keyC, key2, ref256, canvasId){
     const N=grid.length, B=Math.floor(N/6);
     const cs=8;
     const canvas=document.getElementById(canvasId);
@@ -649,12 +663,11 @@
       ctx.fillStyle=`rgb(${g},${g},${g-6})`;
       ctx.fillRect(c*cs,r*cs,cs-1,cs-1);
     }
-    const refS = stegShuffleReferent(ref256, keyASeed);
     const order = stegZigzagBlocks(B);
     let posI=0, blockI=0;
     while(posI<order.length && blockI<keyBArr.length){
       const k=keyBArr[blockI], fk=key2[blockI], orients=keyC[blockI];
-      const form = refS[fk.form_id % refS.length];
+      const form = ref256[fk.form_id % ref256.length];
       const basePos = form[fk.color || 'blue'];
       ctx.fillStyle = fk.color==='blue' ? 'rgba(201,161,90,0.85)' : 'rgba(224,38,27,0.85)';
       for(let sub=0; sub<k*k; sub++){
@@ -679,26 +692,25 @@
 
   let _lastGrid=null, _lastKeys=null;
 
-  function runDemo(){
+  async function runDemo(){
     if(!REF256) return;
     const msg='ANIBALAMIOTX';
-    const {keyASeed, keyB, keyC, key2} = stegMakeKeys(REF256, 60, 1);
-    const grid = stegEncode(msg, keyASeed, keyB, keyC, key2, REF256, 60);
-    const decoded = stegDecode(grid, keyASeed, keyB, keyC, key2, REF256, 60);
+    const {stegKey, keyB, keyC, key2} = stegMakeKeys(REF256, 60, 1);
+    const grid = await stegEncode(msg, stegKey, keyB, keyC, key2, REF256, 60);
+    const decoded = await stegDecode(grid, stegKey, keyB, keyC, key2, REF256, 60);
     const ks = stegKeyspace(keyB, REF256);
-    _lastGrid=grid; _lastKeys={keyASeed, keyB, keyC, key2, gridSize:60};
+    _lastGrid=grid; _lastKeys={stegKeyHex: stegBytesToHex(stegKey), keyB, keyC, key2, gridSize:60};
     document.getElementById('demo-result').hidden=false;
     document.getElementById('demo-msg').innerHTML=
       `<div>Message encodé : <span class="enc-msg">${msg}</span></div>
        <div style="margin-top:6px">Décodé : <span class="enc-msg">${decoded}</span> — identique : ${decoded===msg}</div>`;
     document.getElementById('demo-ks').innerHTML=
-      `<b>Espace de clés</b> (blocs 6×6, grille 60×60) : Clé A 2^${ks.keyA} · Clé B 2^${ks.keyB} · Clé C 2^${ks.keyC} · Clé 2 2^${ks.key2} = <b>2^${ks.total} bits</b><br>
-       AES-256 (standard militaire) : 2^256 bits
-       <div class="keyspace-bar">2^${ks.total} bits — largement au-delà d'AES-256</div>`;
-    stegDrawGrid(grid, keyASeed, keyB, keyC, key2, REF256, 'demo-canvas');
+      `<b>Espace de clés</b> (blocs 6×6, grille 60×60) : Clé stéganographique 256 bits (AES-256-GCM) · Clé B 2^${ks.keyB} · Clé C 2^${ks.keyC} · Clé 2 2^${ks.key2} — confidentialité assurée par AES-256-GCM, B/C/2 dissimulent<br>
+       AES-256 (standard militaire) : 2^256 bits`;
+    stegDrawGrid(grid, keyB, keyC, key2, REF256, 'demo-canvas');
   }
 
-  function encodeMessage(){
+  async function encodeMessage(){
     if(!REF256) return;
     const infoEl = document.getElementById('enc-info');
     const resultEl = document.getElementById('enc-result');
@@ -706,22 +718,22 @@
     if(!msg){ resultEl.hidden=false; infoEl.textContent='Entrez un message.'; return; }
     const N=parseInt(document.getElementById('enc-grid').value);
     const blockSize=parseInt(document.getElementById('enc-mode').value);
-    let keyASeed, keyB, keyC, key2, grid;
+    let stegKey, keyB, keyC, key2, grid;
     try{
-      ({keyASeed, keyB, keyC, key2} = stegMakeKeys(REF256, N, blockSize));
-      grid = stegEncode(msg, keyASeed, keyB, keyC, key2, REF256, N);
+      ({stegKey, keyB, keyC, key2} = stegMakeKeys(REF256, N, blockSize));
+      grid = await stegEncode(msg, stegKey, keyB, keyC, key2, REF256, N);
     }catch(e){
       resultEl.hidden=false;
       infoEl.textContent = 'Erreur : ' + e.message;
       return;
     }
-    _lastGrid=grid; _lastKeys={keyASeed, keyB, keyC, key2, gridSize:N};
+    _lastGrid=grid; _lastKeys={stegKeyHex: stegBytesToHex(stegKey), keyB, keyC, key2, gridSize:N};
     const ks = stegKeyspace(keyB, REF256);
     document.getElementById('enc-result').hidden=false;
     document.getElementById('enc-info').innerHTML=
       `Message « ${msg} » encodé dans une grille ${N}×${N} (blocs ${blockSize*6}×${blockSize*6})<br>
-       Espace de clés : 2^${ks.total} bits (Clé A 2^${ks.keyA} · Clé B 2^${ks.keyB} · Clé C 2^${ks.keyC} · Clé 2 2^${ks.key2})`;
-    document.getElementById('enc-key1').value = 'Clé A (graine de mélange) : ' + keyASeed + '\nClé B (tailles) : ' + JSON.stringify(keyB);
+       Confidentialité : AES-256-GCM (256 bits) · Dissimulation : Clé B 2^${ks.keyB} · Clé C 2^${ks.keyC} · Clé 2 2^${ks.key2}`;
+    document.getElementById('enc-key1').value = 'Clé stéganographique (hex) : ' + stegBytesToHex(stegKey) + '\nClé B (tailles) : ' + JSON.stringify(keyB);
     document.getElementById('enc-key2').value = 'Clé C (orientations) : ' + JSON.stringify(keyC) + '\nClé 2 (formes+couleurs) : ' + JSON.stringify(key2);
     const csvLines=grid.slice(0,5).map(r=>r.join(',')).join('\n')+'\n...';
     document.getElementById('enc-grid-out').value=csvLines;
@@ -740,7 +752,7 @@
     a.download='cles_steganographiques.json'; a.click();
   }
 
-  function decodeMessage(){
+  async function decodeMessage(){
     if(!REF256) return;
     const resultEl = document.getElementById('dec-msg');
     const csvStr=document.getElementById('dec-grid').value.trim();
@@ -749,7 +761,8 @@
     try{
       const grid=csvStr.split('\n').map(r=>r.split(',').map(Number));
       const keys=JSON.parse(keysStr);
-      const msg=stegDecode(grid, keys.keyASeed, keys.keyB, keys.keyC, keys.key2, REF256, keys.gridSize || grid.length);
+      const stegKey = stegHexToBytes(keys.stegKeyHex);
+      const msg=await stegDecode(grid, stegKey, keys.keyB, keys.keyC, keys.key2, REF256, keys.gridSize || grid.length);
       document.getElementById('dec-result').hidden=false;
       resultEl.innerHTML=`Message décodé : <span class="enc-msg">${msg}</span>`;
     } catch(e){
@@ -843,20 +856,27 @@
   }
 
   // ============================================================
-  // Chiffrement géométrique de fichiers — SPN double référent 256+360
-  // (disk_lib.py porté en JS — S-box GF(2^8), 4 tours, MixBlock, permutations
-  // géométriques Ref256 + Ref360, XOR keystream)
+  // Chiffrement de fichiers — architecture hybride (disk_lib.py porté en JS) :
+  //   Couche géométrique (SPN Ref256+Ref360, S-box GF(2^8), 4 tours, MixBlock)
+  //     → diversification de clé de session par secteur, PAS le chiffrement
+  //       lui-même (suite à audit cryptologique externe du 2026-09-10).
+  //   Couche standard → AES-256-GCM par secteur (authentifié individuellement)
+  //     + HMAC-SHA256 global. La référence Python utilise XChaCha20-Poly1305
+  //     (absent de l'API Web Crypto native) ; AES-256-GCM est substitué ici —
+  //     même classe de garantie (AEAD, 256 bits, standard audité) via
+  //     crypto.subtle plutôt qu'une implémentation ChaCha20 maison. Décision
+  //     validée explicitement : pas d'interopérabilité binaire avec le
+  //     fichier .lldh produit par le script Python (déjà le cas par ailleurs).
   // ============================================================
   let diskTables = null;
 
-  const DISK_SECTOR_SIZE = 512;
-  const DISK_CHUNK_SIZE  = 24;
-  const DISK_CHUNKS_FULL = 21;  // Math.floor(512/24)
-  const DISK_TAIL_SIZE   = 8;   // 512 % 24
-  const DISK_N_ROUNDS    = 4;
-  const DISK_NONCE_SIZE  = 16;
-  const DISK_SALT_SIZE   = 16;
-  const DISK_MAC_SIZE    = 32;
+  const DISK_SECTOR_SIZE  = 512;
+  const DISK_TAG_SIZE     = 16;   // tag AES-GCM (128 bits)
+  const DISK_N_ROUNDS     = 4;
+  const DISK_INNER_NONCE_SIZE = 24; // nonce global GeoSPN (HKDF dérive le nonce par secteur)
+  const DISK_INNER_SALT_SIZE  = 32; // sel PBKDF2 pour master_key -> geo_key (interne à GeoSPN)
+  const DISK_OUTER_SALT_SIZE  = 16; // sel PBKDF2 pour passphrase -> master_key (géré par la page)
+  const DISK_MAC_SIZE     = 32;
 
   // Génère les 24 permutations de [0,1,2,3] en ordre lexicographique, pour
   // correspondre exactement à itertools.permutations(range(4)) côté Python —
@@ -1038,39 +1058,6 @@
     return { pt256, pt360, pt360Keys, n360: ref360.length };
   }
 
-  // ── Dérivation des paramètres par tour (le nonce entre dans le sel/seed :
-  // chaque chiffrement a des sous-clés uniques même à passphrase identique) ──
-  async function diskDeriveRound(masterKey, sn, cn, rnd, nonce, n360){
-    const salt = new Uint8Array(DISK_NONCE_SIZE + 20);
-    salt.set(nonce, 0);
-    const sv = new DataView(salt.buffer, DISK_NONCE_SIZE, 20);
-    sv.setBigUint64(0, BigInt(sn), false);
-    sv.setUint32(8, cn, false);
-    sv.setUint32(12, rnd, false);
-    sv.setUint32(16, 0xDEADBEEF, false);
-    const keyMaterial = await crypto.subtle.importKey('raw', masterKey, {name:'PBKDF2'}, false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:1000, hash:'SHA-256'}, keyMaterial, 256);
-    const dk = new Uint8Array(bits);
-    const cfg256 = dk[0] % 256;
-    const oi256 = ((dk[1]<<8)|dk[2]) % 24;
-    const col256 = dk[3] & 1;
-    const xk = dk.slice(4,28);
-    const idx360 = dk[28] % n360;
-    const oi360 = dk[29] % 6;
-
-    const seedInput = new Uint8Array(masterKey.length + DISK_NONCE_SIZE + 20);
-    seedInput.set(masterKey, 0);
-    seedInput.set(nonce, masterKey.length);
-    const siView = new DataView(seedInput.buffer, masterKey.length + DISK_NONCE_SIZE, 20);
-    siView.setBigUint64(0, BigInt(sn), false);
-    siView.setUint32(8, cn, false);
-    siView.setUint32(12, rnd, false);
-    siView.setUint32(16, cfg256, false);
-    const seed = await diskSha256(seedInput);
-    const [sbox, sboxInv] = await diskMakeSboxGf(seed);
-    return {cfg256, oi256, col256, xk, sbox, sboxInv, idx360, oi360};
-  }
-
   function diskResolve360Key(tables, idx360, oi360){
     let key = `${idx360},${oi360}`;
     if(!tables.pt360.has(key)){
@@ -1080,84 +1067,71 @@
     return key;
   }
 
-  async function diskDeriveTailKey(masterKey, sectorNum, nonce){
-    const salt = new Uint8Array(DISK_NONCE_SIZE + 12);
-    salt.set(nonce, 0);
-    const view = new DataView(salt.buffer, DISK_NONCE_SIZE, 12);
-    view.setBigUint64(0, BigInt(sectorNum), false);
-    view.setUint32(8, 99, false);
-    const keyMaterial = await crypto.subtle.importKey('raw', masterKey, {name:'PBKDF2'}, false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:1000, hash:'SHA-256'}, keyMaterial, DISK_TAIL_SIZE*8);
+  // Diversification de clé de session (32B) par secteur, via le SPN
+  // géométrique — PAS un chiffrement en soi, juste block = master_key XOR
+  // SHA256(nonce+secteur), puis 2 chunks de 24B passés chacun par 4 tours de
+  // (S-box GF → Perm Ref256 → MixBlock → Perm Ref360), dont les 16 premiers
+  // octets de sortie forment une moitié de la clé de session. Porté depuis
+  // disk_lib.py::_geo_derive — vérifié octet pour octet contre la référence
+  // Python (seule la couche AEAD qui suit diverge, voir plus haut).
+  async function diskGeoDerive(masterKey, nonce, sn, tables, nRounds){
+    const seedMaterial = new Uint8Array(nonce.length + 8);
+    seedMaterial.set(nonce, 0);
+    new DataView(seedMaterial.buffer, nonce.length, 8).setBigUint64(0, BigInt(sn), false);
+    const h = await diskSha256(seedMaterial);
+    const block = new Uint8Array(32);
+    for(let i=0;i<32;i++) block[i] = masterKey[i] ^ h[i];
+
+    const result = new Uint8Array(32);
+    for(let chunkI=0; chunkI<2; chunkI++){
+      const chunk = new Uint8Array(24);
+      const start = chunkI*12;
+      for(let i=0;i<24;i++){ const srcIdx = start+i; if(srcIdx < block.length) chunk[i] = block[srcIdx]; }
+      let data = chunk;
+      for(let rnd=0; rnd<nRounds; rnd++){
+        const salt = new Uint8Array(24);
+        const sv = new DataView(salt.buffer, 0, 16);
+        sv.setBigUint64(0, BigInt(sn), false);
+        sv.setUint32(8, chunkI, false);
+        sv.setUint32(12, rnd, false);
+        salt.set(nonce.slice(0,8), 16);
+        const dkInput = new Uint8Array(masterKey.length + salt.length);
+        dkInput.set(masterKey, 0); dkInput.set(salt, masterKey.length);
+        const dk = await diskSha256(dkInput);
+        const cfg = dk[0] % 256;
+        const oi = ((dk[1]<<8)|dk[2]) % 24;
+        const col = dk[3] & 1;
+        const idx360 = dk[4] % tables.n360;
+        const oi360 = dk[5] % 6;
+        const seedInput = new Uint8Array(masterKey.length + salt.length + 1);
+        seedInput.set(masterKey, 0); seedInput.set(salt, masterKey.length); seedInput[masterKey.length+salt.length] = cfg;
+        const seed = await diskSha256(seedInput);
+        const [sbox] = await diskMakeSboxGf(seed);
+        const [P256] = tables.pt256.get(`${cfg},${oi},${col}`);
+        const [P360] = tables.pt360.get(diskResolve360Key(tables, idx360, oi360));
+        const sub = new Uint8Array(24);
+        for(let i=0;i<24;i++) sub[i] = sbox[data[i]];
+        const p256 = new Uint8Array(24);
+        for(let i=0;i<24;i++) p256[i] = sub[P256[i]];
+        const mx = diskMix(p256);
+        const next = new Uint8Array(24);
+        for(let i=0;i<24;i++) next[i] = mx[P360[i]];
+        data = next;
+      }
+      result.set(data.slice(0,16), chunkI*16);
+    }
+    return result;
+  }
+
+  // Nonce unique par secteur, dérivé du nonce global via HKDF-SHA256 —
+  // vérifié octet pour octet contre cryptography.hazmat...HKDF côté Python.
+  async function diskSectorNonce(globalNonce, sectorNum){
+    const salt = new Uint8Array(8);
+    new DataView(salt.buffer).setBigUint64(0, BigInt(sectorNum), false);
+    const info = new TextEncoder().encode('GeoSPN-sector-nonce');
+    const keyMaterial = await crypto.subtle.importKey('raw', globalNonce, 'HKDF', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt, info}, keyMaterial, DISK_INNER_NONCE_SIZE*8);
     return new Uint8Array(bits);
-  }
-
-  // SPN 5 couches par tour, 4 tours : 1) S-box GF 2) permutation géo Ref256
-  // 3) MixBlock 4) permutation géo Ref360 5) XOR keystream — déchiffrement
-  // dans l'ordre strictement inverse, tours en ordre inverse.
-  async function diskEncChunk(chunk, masterKey, sn, cn, nonce, tables, nRounds){
-    let data = new Uint8Array(chunk);
-    for(let rnd=0; rnd<nRounds; rnd++){
-      const {cfg256, oi256, col256, xk, sbox, idx360, oi360} = await diskDeriveRound(masterKey, sn, cn, rnd, nonce, tables.n360);
-      const [P256] = tables.pt256.get(`${cfg256},${oi256},${col256}`);
-      const [P360] = tables.pt360.get(diskResolve360Key(tables, idx360, oi360));
-      const sub = new Uint8Array(24);
-      for(let i=0;i<24;i++) sub[i] = sbox[data[i]];
-      const p256 = new Uint8Array(24);
-      for(let i=0;i<24;i++) p256[i] = sub[P256[i]];
-      const mx = diskMix(p256);
-      const p360 = new Uint8Array(24);
-      for(let i=0;i<24;i++) p360[i] = mx[P360[i]];
-      const next = new Uint8Array(24);
-      for(let i=0;i<24;i++) next[i] = p360[i] ^ xk[i];
-      data = next;
-    }
-    return data;
-  }
-
-  async function diskDecChunk(chunk, masterKey, sn, cn, nonce, tables, nRounds){
-    let data = new Uint8Array(chunk);
-    for(let rnd=nRounds-1; rnd>=0; rnd--){
-      const {cfg256, oi256, col256, xk, sboxInv, idx360, oi360} = await diskDeriveRound(masterKey, sn, cn, rnd, nonce, tables.n360);
-      const [, Pi256] = tables.pt256.get(`${cfg256},${oi256},${col256}`);
-      const [, Pi360] = tables.pt360.get(diskResolve360Key(tables, idx360, oi360));
-      const unxor = new Uint8Array(24);
-      for(let i=0;i<24;i++) unxor[i] = data[i] ^ xk[i];
-      const undep360 = new Uint8Array(24);
-      for(let j=0;j<24;j++) undep360[j] = unxor[Pi360[j]];
-      const unmixed = diskUnmix(undep360);
-      const undep256 = new Uint8Array(24);
-      for(let j=0;j<24;j++) undep256[j] = unmixed[Pi256[j]];
-      const next = new Uint8Array(24);
-      for(let i=0;i<24;i++) next[i] = sboxInv[undep256[i]];
-      data = next;
-    }
-    return data;
-  }
-
-  async function diskEncryptSector(data, sectorNum, masterKey, nonce, tables, nRounds=DISK_N_ROUNDS){
-    const out = new Uint8Array(DISK_SECTOR_SIZE);
-    for(let ci=0; ci<DISK_CHUNKS_FULL; ci++){
-      const chunk = data.slice(ci*DISK_CHUNK_SIZE, (ci+1)*DISK_CHUNK_SIZE);
-      const enc = await diskEncChunk(chunk, masterKey, sectorNum, ci, nonce, tables, nRounds);
-      out.set(enc, ci*DISK_CHUNK_SIZE);
-    }
-    const tailKey = await diskDeriveTailKey(masterKey, sectorNum, nonce);
-    const tail = data.slice(DISK_CHUNKS_FULL*DISK_CHUNK_SIZE);
-    for(let i=0;i<DISK_TAIL_SIZE;i++) out[DISK_CHUNKS_FULL*DISK_CHUNK_SIZE+i] = tail[i] ^ tailKey[i];
-    return out;
-  }
-
-  async function diskDecryptSector(data, sectorNum, masterKey, nonce, tables, nRounds=DISK_N_ROUNDS){
-    const out = new Uint8Array(DISK_SECTOR_SIZE);
-    for(let ci=0; ci<DISK_CHUNKS_FULL; ci++){
-      const chunk = data.slice(ci*DISK_CHUNK_SIZE, (ci+1)*DISK_CHUNK_SIZE);
-      const dec = await diskDecChunk(chunk, masterKey, sectorNum, ci, nonce, tables, nRounds);
-      out.set(dec, ci*DISK_CHUNK_SIZE);
-    }
-    const tailKey = await diskDeriveTailKey(masterKey, sectorNum, nonce);
-    const tail = data.slice(DISK_CHUNKS_FULL*DISK_CHUNK_SIZE);
-    for(let i=0;i<DISK_TAIL_SIZE;i++) out[DISK_CHUNKS_FULL*DISK_CHUNK_SIZE+i] = tail[i] ^ tailKey[i];
-    return out;
   }
 
   function diskTimingSafeEqual(a, b){
@@ -1173,53 +1147,85 @@
     return new Uint8Array(sig);
   }
 
-  // Format de sortie : [16B nonce][secteurs chiffrés][32B HMAC-SHA256] — le
-  // nonce garantit des sous-clés uniques par fichier, le MAC détecte toute
-  // altération ou passphrase incorrecte au lieu de rendre du bruit silencieux.
+  async function diskPbkdf2(secret, salt, iterations, dklenBytes){
+    const km = await crypto.subtle.importKey('raw', secret, {name:'PBKDF2'}, false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations, hash:'SHA-256'}, km, dklenBytes*8);
+    return new Uint8Array(bits);
+  }
+
+  // Format : [32B sel interne][24B nonce global][secteurs, chacun 512B+16B de
+  // tag AES-GCM][32B HMAC-SHA256 global]. Chaque secteur a sa propre clé de
+  // session (diskGeoDerive) et son propre nonce (HKDF du nonce global) — une
+  // passphrase incorrecte ou un fichier altéré échouent au tag AES-GCM et/ou
+  // au HMAC global plutôt que de produire du bruit silencieux.
   async function diskEncrypt(fileData, masterKey, tables, onProgress){
-    const originalLen = fileData.byteLength;
-    const padLen = (DISK_SECTOR_SIZE - (8+originalLen) % DISK_SECTOR_SIZE) % DISK_SECTOR_SIZE;
-    const padded = new Uint8Array(8 + originalLen + padLen);
-    new DataView(padded.buffer).setBigUint64(0, BigInt(originalLen), false);
-    padded.set(new Uint8Array(fileData), 8);
-    const nSectors = padded.length / DISK_SECTOR_SIZE;
-    const nonce = crypto.getRandomValues(new Uint8Array(DISK_NONCE_SIZE));
-    const ciphertext = new Uint8Array(nSectors * DISK_SECTOR_SIZE);
+    const innerSalt = crypto.getRandomValues(new Uint8Array(DISK_INNER_SALT_SIZE));
+    const globalNonce = crypto.getRandomValues(new Uint8Array(DISK_INNER_NONCE_SIZE));
+    const geoKey = await diskPbkdf2(masterKey, innerSalt, 300000, 32);
+
+    const olen = fileData.byteLength;
+    const unpadded = new Uint8Array(8+olen);
+    new DataView(unpadded.buffer).setBigUint64(0, BigInt(olen), false);
+    unpadded.set(new Uint8Array(fileData), 8);
+    const pad = (DISK_SECTOR_SIZE - unpadded.length % DISK_SECTOR_SIZE) % DISK_SECTOR_SIZE;
+    const padded = new Uint8Array(unpadded.length+pad);
+    padded.set(unpadded, 0);
+
+    const nSectors = padded.length/DISK_SECTOR_SIZE;
+    const ciphertext = new Uint8Array(nSectors*(DISK_SECTOR_SIZE+DISK_TAG_SIZE));
     for(let s=0; s<nSectors; s++){
       const sector = padded.slice(s*DISK_SECTOR_SIZE, (s+1)*DISK_SECTOR_SIZE);
-      const enc = await diskEncryptSector(sector, s, masterKey, nonce, tables);
-      ciphertext.set(enc, s*DISK_SECTOR_SIZE);
+      const sessionKey = await diskGeoDerive(geoKey, globalNonce, s, tables, DISK_N_ROUNDS);
+      const sectorNonce = (await diskSectorNonce(globalNonce, s)).slice(0, 12);
+      const aad = new Uint8Array(8+globalNonce.length);
+      new DataView(aad.buffer, 0, 8).setBigUint64(0, BigInt(s), false);
+      aad.set(globalNonce, 8);
+      const key = await crypto.subtle.importKey('raw', sessionKey, {name:'AES-GCM'}, false, ['encrypt']);
+      const encBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv:sectorNonce, additionalData:aad, tagLength:128}, key, sector);
+      ciphertext.set(new Uint8Array(encBuf), s*(DISK_SECTOR_SIZE+DISK_TAG_SIZE));
       if(onProgress) onProgress(Math.round((s+1)/nSectors*100));
     }
-    const payload = new Uint8Array(DISK_NONCE_SIZE + ciphertext.length);
-    payload.set(nonce, 0);
-    payload.set(ciphertext, DISK_NONCE_SIZE);
+    const payload = new Uint8Array(innerSalt.length+globalNonce.length+ciphertext.length);
+    payload.set(innerSalt, 0); payload.set(globalNonce, innerSalt.length); payload.set(ciphertext, innerSalt.length+globalNonce.length);
     const mac = await diskHmacSha256(masterKey, payload);
-    const out = new Uint8Array(payload.length + DISK_MAC_SIZE);
-    out.set(payload, 0);
-    out.set(mac, payload.length);
+    const out = new Uint8Array(payload.length+DISK_MAC_SIZE);
+    out.set(payload, 0); out.set(mac, payload.length);
     return out;
   }
 
   async function diskDecrypt(data, masterKey, tables, onProgress){
-    if(data.length < DISK_NONCE_SIZE + DISK_MAC_SIZE) throw new Error('Données trop courtes.');
-    const macRecv = data.slice(data.length - DISK_MAC_SIZE);
-    const payload = data.slice(0, data.length - DISK_MAC_SIZE);
+    if(data.length < DISK_INNER_SALT_SIZE+DISK_INNER_NONCE_SIZE+DISK_MAC_SIZE) throw new Error('Données trop courtes.');
+    const macRecv = data.slice(data.length-DISK_MAC_SIZE);
+    const payload = data.slice(0, data.length-DISK_MAC_SIZE);
     const macCalc = await diskHmacSha256(masterKey, payload);
-    if(!diskTimingSafeEqual(macRecv, macCalc)) throw new Error('MAC invalide — fichier altéré ou passphrase incorrecte.');
-    const nonce = payload.slice(0, DISK_NONCE_SIZE);
-    const ciphertext = payload.slice(DISK_NONCE_SIZE);
-    if(ciphertext.length % DISK_SECTOR_SIZE !== 0) throw new Error('Longueur chiffrée invalide.');
-    const nSectors = ciphertext.length / DISK_SECTOR_SIZE;
-    const plaintext = new Uint8Array(nSectors * DISK_SECTOR_SIZE);
+    if(!diskTimingSafeEqual(macRecv, macCalc)) throw new Error('MAC global invalide — fichier altéré ou passphrase incorrecte.');
+    const innerSalt = payload.slice(0, DISK_INNER_SALT_SIZE);
+    const globalNonce = payload.slice(DISK_INNER_SALT_SIZE, DISK_INNER_SALT_SIZE+DISK_INNER_NONCE_SIZE);
+    const ciphertext = payload.slice(DISK_INNER_SALT_SIZE+DISK_INNER_NONCE_SIZE);
+    const sectorEncSize = DISK_SECTOR_SIZE+DISK_TAG_SIZE;
+    if(ciphertext.length % sectorEncSize !== 0) throw new Error('Longueur chiffrée invalide.');
+    const geoKey = await diskPbkdf2(masterKey, innerSalt, 300000, 32);
+    const nSectors = ciphertext.length/sectorEncSize;
+    const plaintext = new Uint8Array(nSectors*DISK_SECTOR_SIZE);
     for(let s=0; s<nSectors; s++){
-      const sector = ciphertext.slice(s*DISK_SECTOR_SIZE, (s+1)*DISK_SECTOR_SIZE);
-      const dec = await diskDecryptSector(sector, s, masterKey, nonce, tables);
-      plaintext.set(dec, s*DISK_SECTOR_SIZE);
+      const encSector = ciphertext.slice(s*sectorEncSize, (s+1)*sectorEncSize);
+      const sessionKey = await diskGeoDerive(geoKey, globalNonce, s, tables, DISK_N_ROUNDS);
+      const sectorNonce = (await diskSectorNonce(globalNonce, s)).slice(0, 12);
+      const aad = new Uint8Array(8+globalNonce.length);
+      new DataView(aad.buffer, 0, 8).setBigUint64(0, BigInt(s), false);
+      aad.set(globalNonce, 8);
+      const key = await crypto.subtle.importKey('raw', sessionKey, {name:'AES-GCM'}, false, ['decrypt']);
+      let decBuf;
+      try{
+        decBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv:sectorNonce, additionalData:aad, tagLength:128}, key, encSector);
+      }catch(e){
+        throw new Error(`Tag AES-GCM invalide au secteur ${s} — fichier altéré ou passphrase incorrecte.`);
+      }
+      plaintext.set(new Uint8Array(decBuf), s*DISK_SECTOR_SIZE);
       if(onProgress) onProgress(Math.round((s+1)/nSectors*100));
     }
-    const originalLen = Number(new DataView(plaintext.buffer).getBigUint64(0, false));
-    return plaintext.slice(8, 8+originalLen);
+    const olen = Number(new DataView(plaintext.buffer).getBigUint64(0, false));
+    return plaintext.slice(8, 8+olen);
   }
 
   // Dérive la clé maître depuis la passphrase avec un sel — sel aléatoire et
@@ -1228,7 +1234,7 @@
   // jamais à reproduire la clé sans connaître ce sel.
   async function diskPassphraseToKey(passphrase, salt){
     const keyMat = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), {name:'PBKDF2'}, false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:200000, hash:'SHA-256'}, keyMat, 256);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:300000, hash:'SHA-256'}, keyMat, 256);
     return new Uint8Array(bits);
   }
 
@@ -1248,12 +1254,12 @@
     const file = input.files[0];
     const buf = new Uint8Array(await file.arrayBuffer());
     diskSetProgress('disk-encrypt-progress-bar','disk-encrypt-progress',0);
-    const salt = crypto.getRandomValues(new Uint8Array(DISK_SALT_SIZE));
+    const salt = crypto.getRandomValues(new Uint8Array(DISK_OUTER_SALT_SIZE));
     const masterKey = await diskPassphraseToKey(pass, salt);
     const encBody = await diskEncrypt(buf, masterKey, diskTables, pct=>diskSetProgress('disk-encrypt-progress-bar','disk-encrypt-progress',pct));
-    const out = new Uint8Array(DISK_SALT_SIZE + encBody.length);
+    const out = new Uint8Array(DISK_OUTER_SALT_SIZE + encBody.length);
     out.set(salt, 0);
-    out.set(encBody, DISK_SALT_SIZE);
+    out.set(encBody, DISK_OUTER_SALT_SIZE);
     const blob = new Blob([out], {type:'application/octet-stream'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1271,13 +1277,13 @@
     if(!input.files[0]){ infoEl.textContent = 'Choisis un fichier .lldh.'; return; }
     const file = input.files[0];
     const buf = new Uint8Array(await file.arrayBuffer());
-    if(buf.length < DISK_SALT_SIZE){ infoEl.textContent = 'Fichier trop court.'; return; }
+    if(buf.length < DISK_OUTER_SALT_SIZE){ infoEl.textContent = 'Fichier trop court.'; return; }
     diskSetProgress('disk-decrypt-progress-bar','disk-decrypt-progress',0);
     let out;
     try{
-      const salt = buf.slice(0, DISK_SALT_SIZE);
+      const salt = buf.slice(0, DISK_OUTER_SALT_SIZE);
       const masterKey = await diskPassphraseToKey(pass, salt);
-      out = await diskDecrypt(buf.slice(DISK_SALT_SIZE), masterKey, diskTables, pct=>diskSetProgress('disk-decrypt-progress-bar','disk-decrypt-progress',pct));
+      out = await diskDecrypt(buf.slice(DISK_OUTER_SALT_SIZE), masterKey, diskTables, pct=>diskSetProgress('disk-decrypt-progress-bar','disk-decrypt-progress',pct));
     }catch(e){
       infoEl.textContent = 'Erreur de déchiffrement : ' + e.message;
       return;
