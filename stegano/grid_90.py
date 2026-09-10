@@ -28,8 +28,8 @@ Capacité :
   ses clés sur une grille pleine et annonce nettement plus.
 """
 
-import os, secrets
-from typing import List, Tuple, Dict, Optional
+import secrets
+from typing import List, Tuple
 from stegano_lib import (
     load_referents, make_keys,
     apply_orientation, ALPHA_LEN,
