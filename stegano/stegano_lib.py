@@ -441,16 +441,15 @@ def encode_carter(message: str, master_key: bytes,
     n_msg   = sum(1 for g in grammar if g['role'] == _MESSAGE)
 
     payload = _encrypt(message, xchacha_key)
-    nibbles = []
-    for b in payload:
-        hi, lo = _byte_to_nibs(b)
-        nibbles += [hi, lo]
+    # Même flux de symboles base-44 que encode() : les nibbles [0..15]
+    # trahissaient les cellules message dans un bruit couvrant [0..43].
+    nibbles = payload_to_symbols(payload)
 
     if len(nibbles) > n_msg * 6:
         raise ValueError(
             f"Message trop long pour la grammaire dérivée : "
-            f"{len(nibbles)//2} bytes > {n_msg * 3} bytes disponibles. "
-            f"Changer la clé ou réduire le message.")
+            f"{len(message)} caractères > {max_message_for(n_msg * 6)} "
+            f"disponibles. Changer la clé ou réduire le message.")
 
     grid  = [[_sec.randbelow(ALPHA_LEN) for _ in range(CARTER_GRID)]
               for _ in range(CARTER_GRID)]
@@ -487,14 +486,16 @@ def carter_capacity(master_key: bytes, ref256: List[Dict]) -> Dict:
     n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
     n_pur = sum(1 for g in grammar if g['role'] == _PURE)
     overhead = 4 + 24 + 16   # header + nonce + tag XChaCha20
+    n_pos = sum(len(_carter_positions(i // CARTER_SIDE, i % CARTER_SIDE, g, ref256))
+                for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
     return {
         'blocs_message':    n_msg,
         'blocs_structure':  n_str,
         'blocs_purs':       n_pur,
-        'nibbles':          n_msg * 6,
-        'bytes_bruts':      n_msg * 3,
-        'bytes_utiles':     n_msg * 3 - overhead,
-        'chars_max':        max(0, n_msg * 3 - overhead),
+        'nibbles':          n_pos,
+        'bytes_bruts':      max_payload_for(n_pos),
+        'bytes_utiles':     max_message_for(n_pos),
+        'chars_max':        max_message_for(n_pos),
         'ambiguite':        f"1 message parmi {n_msg + n_str} blocs structurés",
     }
 
@@ -580,15 +581,21 @@ def encode_carter_360(message: str, master_key: bytes,
     n_msg   = sum(1 for g in grammar if g['role'] == _MESSAGE)
 
     payload = _encrypt(message, xchacha_key)
-    nibbles = []
-    for b in payload:
-        hi, lo = _byte_to_nibs(b)
-        nibbles += [hi, lo]
+    # Même flux de symboles base-44 que encode() : les nibbles [0..15]
+    # trahissaient les cellules message dans un bruit couvrant [0..43].
+    nibbles = payload_to_symbols(payload)
 
-    if len(nibbles) > n_msg * 8:
+    # Positions réellement disponibles : une forme Ref360 peut compter moins
+    # de 8 points pour la couleur tirée, et se tronque au bord de la grille.
+    # Le produit n_msg*8 annonçait donc une capacité inatteignable.
+    n_pos = sum(len(_carter360_positions(i // CARTER360_SIDE, i % CARTER360_SIDE,
+                                        g, ref360))
+                for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+    if len(nibbles) > n_pos:
         raise ValueError(
-            f"Message trop long : {len(nibbles)//2} bytes > "
-            f"{n_msg * 4} bytes disponibles ({n_msg} blocs × 8 positions / 2).")
+            f"Message trop long : {len(message)} caractères > "
+            f"{max_message_for(n_pos)} disponibles "
+            f"({n_msg} blocs message, {n_pos} positions).")
 
     grid  = [[_sec.randbelow(ALPHA_LEN) for _ in range(CARTER360_GRID)]
               for _ in range(CARTER360_GRID)]
@@ -626,7 +633,12 @@ def carter360_capacity(master_key: bytes,
     n_msg = sum(1 for g in grammar if g['role'] == _MESSAGE)
     n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
     n_pur = sum(1 for g in grammar if g['role'] == _PURE)
-    overhead = 4 + 24 + 16
+    # Positions réellement disponibles : une forme Ref360 peut compter moins
+    # de 8 points pour la couleur tirée, et se tronque au bord de la grille.
+    # Le produit n_msg*8 annonçait donc une capacité inatteignable.
+    n_pos = sum(len(_carter360_positions(i // CARTER360_SIDE, i % CARTER360_SIDE,
+                                        g, ref360))
+                for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
     return {
         'referent':         '360',
         'grille':           f'{CARTER360_GRID}×{CARTER360_GRID}',
@@ -634,9 +646,9 @@ def carter360_capacity(master_key: bytes,
         'blocs_structure':  n_str,
         'blocs_purs':       n_pur,
         'positions_bloc':   8,
-        'nibbles':          n_msg * 8,
-        'bytes_utiles':     max(0, n_msg * 4 - overhead),
-        'chars_max':        max(0, n_msg * 4 - overhead),
+        'nibbles':          n_pos,
+        'bytes_utiles':     max_message_for(n_pos),
+        'chars_max':        max_message_for(n_pos),
         'ambiguite':        f"1 message parmi {n_msg + n_str} blocs structurés",
     }
 
@@ -746,15 +758,15 @@ def encode_carter_mix(message: str, master_key: bytes,
                       for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
 
     payload = _encrypt(message, xchacha_key)
-    nibbles = []
-    for b in payload:
-        hi, lo = _byte_to_nibs(b)
-        nibbles += [hi, lo]
+    # Même flux de symboles base-44 que encode() : les nibbles [0..15]
+    # trahissaient les cellules message dans un bruit couvrant [0..43].
+    nibbles = payload_to_symbols(payload)
 
     if len(nibbles) > nibbles_cap:
         raise ValueError(
-            f"Message trop long : {len(nibbles)//2} bytes > "
-            f"{nibbles_cap//2} bytes disponibles dans la grammaire dérivée.")
+            f"Message trop long : {len(message)} caractères > "
+            f"{max_message_for(nibbles_cap)} disponibles dans la "
+            f"grammaire dérivée.")
 
     grid  = [[_sec.randbelow(ALPHA_LEN) for _ in range(CARTER_MIX_GRID)]
               for _ in range(CARTER_MIX_GRID)]
@@ -796,8 +808,12 @@ def carter_mix_capacity(master_key: bytes,
     n256s = sum(1 for g in grammar if g['role']==_STRUCTURED and g['ref']==_REF256)
     n360s = sum(1 for g in grammar if g['role']==_STRUCTURED and g['ref']==_REF360)
     n_pur = sum(1 for g in grammar if g['role']==_PURE)
-    nibs  = n256m*24 + n360m*8
-    overhead = 4+24+16
+    # La capacité doit être calculée comme le fait l'encodeur : une forme
+    # tronquée au bord de la grille rend moins de 24 (ou 8) positions.
+    # L'ancien produit n256m*24 + n360m*8 annonçait jusqu'à 12 % de trop.
+    nibs  = sum(len(_mix_positions(i // CARTER_MIX_SIDE, i % CARTER_MIX_SIDE,
+                                   g, ref256, ref360))
+                for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
     return {
         'grille':              f'{CARTER_MIX_GRID}×{CARTER_MIX_GRID}',
         'meta_blocs':          CARTER_MIX_N,
@@ -807,8 +823,8 @@ def carter_mix_capacity(master_key: bytes,
         'structure_ref360':    n360s,
         'purs':                n_pur,
         'nibbles_total':       nibs,
-        'bytes_utiles':        max(0, nibs//2 - overhead),
-        'chars_max':           max(0, nibs//2 - overhead),
+        'bytes_utiles':        max_message_for(nibs),
+        'chars_max':           max_message_for(nibs),
         'ambiguite_256':       f"1/{n256m+n256s} méta-blocs Ref256",
         'ambiguite_360':       f"1/{n360m+n360s} méta-blocs Ref360",
     }
