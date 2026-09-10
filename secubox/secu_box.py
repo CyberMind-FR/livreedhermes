@@ -23,6 +23,19 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey, X25519PublicKey)
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF2
+from cryptography.hazmat.primitives import hashes as _hashes2
+
+def _xchacha_enc2(key, pt, aad=b''):
+    n=os.urandom(24)
+    sk=_HKDF2(_hashes2.SHA256(),32,salt=n[:16],info=b'XChaCha20-HChaCha20-subkey').derive(key)
+    ct=ChaCha20Poly1305(sk).encrypt(b'\x00'*4+n[16:],pt,aad or None)
+    return n+ct
+
+def _xchacha_dec2(key, data, aad=b''):
+    n,ct=data[:24],data[24:]
+    sk=_HKDF2(_hashes2.SHA256(),32,salt=n[:16],info=b'XChaCha20-HChaCha20-subkey').derive(key)
+    return ChaCha20Poly1305(sk).decrypt(b'\x00'*4+n[16:],ct,aad or None)
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from stegano_lib import (
@@ -51,15 +64,13 @@ class Identity:
                   serialization.PrivateFormat.Raw, serialization.NoEncryption())
         salt  = os.urandom(16)
         key   = hashlib.pbkdf2_hmac('sha256', passphrase.encode(), salt, 300_000, 32)
-        nonce = os.urandom(12)
-        ct    = ChaCha20Poly1305(key).encrypt(nonce, raw, b'SecuBox-Identity-v1')
-        return salt + nonce + ct
+        return salt + _xchacha_enc2(key, raw, b'SecuBox-Identity-v1')
 
     @classmethod
     def from_export(cls, data: bytes, passphrase: str) -> 'Identity':
-        salt, nonce, ct = data[:16], data[16:28], data[28:]
+        salt, enc = data[:16], data[16:]
         key = hashlib.pbkdf2_hmac('sha256', passphrase.encode(), salt, 300_000, 32)
-        raw = ChaCha20Poly1305(key).decrypt(nonce, ct, b'SecuBox-Identity-v1')
+        raw = _xchacha_dec2(key, enc, b'SecuBox-Identity-v1')
         return cls(raw)
 
 
@@ -262,14 +273,14 @@ def demo():
     print("\n6. IDENTITÉ EXPORTÉE\n")
     exported  = alice.export_private("passphrase_test")
     alice2    = Identity.from_export(exported, "passphrase_test")
-    print(f"   {len(exported)} bytes chiffrés (PBKDF2+ChaCha20) ✓")
+    print(f"   {len(exported)} bytes chiffrés (PBKDF2+XChaCha20) ✓")
     print(f"   Restaurée identique : {alice.public_bytes == alice2.public_bytes} ✓")
 
     print("\n=== ARCHITECTURE SECUBOX ===\n")
     print("  Clés long-terme : X25519 exportées chiffrées")
     print("  Échange         : ECDH éphémère, HKDF info canonique")
     print("  Forward secrecy : clé éphémère détruite après derive()")
-    print("  Chiffrement     : XChaCha20-Poly1305")
+    print("  Chiffrement     : XChaCha20-Poly1305 (nonce 24 bytes)")
     print("  Dissimulation   : La Livrée d'Hermès (Ref256+Ref360)")
     print("  Déni plausible  : 2 zones, 0 collision, 1 grille")
 

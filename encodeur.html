@@ -1119,17 +1119,35 @@
   }
 
   // ============================================================
-  // Vault — coffre de fichiers chiffrés (vault_lib.py porté en JS)
-  // Format .sbvault : [32B salt][4B taille manifest][manifest chiffré]
-  // [entrées chiffrées, chacune [4B taille][données]][32B HMAC-SHA256 global]
+  // Vault v1.1 — coffre de fichiers chiffrés (vault_lib.py porté en JS)
+  // Corrections d'audit portées depuis vault_lib.py v1.1 (2026-09-10) :
+  //   [A1] Taille manifest bornée (MAX_MANIFEST_SIZE) avant déchiffrement.
+  //   [A2] Taille et nombre d'entrées bornés (MAX_ENTRY_SIZE/MAX_ENTRIES).
+  //   [A4] Clé MAC dédiée dérivée par HKDF — master_key jamais réutilisée
+  //        directement pour l'intégrité (séparation des usages de clé).
+  //   [A5] En-tête versionné : magic "SBVT" + version + identifiant d'algo.
+  // [A3] (XChaCha20 réel à nonce 24 octets) ne s'applique pas ici : cette
+  // page utilise déjà AES-256-GCM (nonce 12 octets, natif Web Crypto) à la
+  // place de XChaCha20-Poly1305, substitution indépendante de la taille de
+  // nonce choisie côté Python — voir la note en tête de page.
+  // Format .sbvault : [4B magic "SBVT"][1B version][1B algo][2B réservés]
+  // [32B salt][4B taille manifest][manifest chiffré][entrées chiffrées,
+  // chacune [4B taille][données]][32B HMAC-SHA256 (clé dédiée)].
   // Clé maître : PBKDF2-SHA256(passphrase, 'SecuBox-Vault-KDF-v1', 300000,
-  // 32) — sel fixe applicatif (pas aléatoire) : c'est le même mécanisme que
+  // 32) — sel fixe applicatif (pas aléatoire) : même mécanisme que
   // secu_box_cli.py::_vault_key(), qui permet de rouvrir le même vault avec
-  // la seule passphrase, sans avoir à conserver un sel séparé. Chaque entrée
-  // et le manifest ont leur propre clé dérivée par HKDF-SHA256 depuis le sel
-  // interne du vault (aléatoire, embarqué dans le fichier .sbvault).
-  // AES-256-GCM substitué à XChaCha20-Poly1305 (voir note en tête de page).
+  // la seule passphrase, sans avoir à conserver un sel séparé. Manifest,
+  // entrées et MAC ont chacun leur propre clé dérivée par HKDF-SHA256
+  // depuis le sel interne du vault (aléatoire, embarqué dans le fichier).
   // ============================================================
+  const VAULT_MAGIC = new Uint8Array([0x53,0x42,0x56,0x54]); // "SBVT"
+  const VAULT_VERSION = 1;
+  const VAULT_ALG_AESGCM = 2; // convention propre à cette page (1 = xchacha20 côté Python, non utilisé ici)
+  const VAULT_HEADER_SIZE = 4+1+1+2+32; // magic+version+algo+réservés+salt
+  const VAULT_MAX_MANIFEST_SIZE = 64*1024*1024;   // 64 Mo
+  const VAULT_MAX_ENTRY_SIZE    = 512*1024*1024;  // 512 Mo
+  const VAULT_MAX_ENTRIES       = 65536;
+
   async function vaultDeriveMasterKey(passphrase){
     const keyMat = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), {name:'PBKDF2'}, false, ['deriveBits']);
     const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt: new TextEncoder().encode('SecuBox-Vault-KDF-v1'), iterations:300000, hash:'SHA-256'}, keyMat, 256);
@@ -1140,8 +1158,9 @@
     const bits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt, info: new TextEncoder().encode(infoStr)}, keyMaterial, 256);
     return new Uint8Array(bits);
   }
-  function vaultEntryKey(masterKey, entryName, salt){ return vaultDeriveSubKey(masterKey, salt, `SecuBox-Vault-Entry:${entryName}`); }
-  function vaultManifestKey(masterKey, salt){ return vaultDeriveSubKey(masterKey, salt, 'SecuBox-Vault-Manifest'); }
+  function vaultEntryKey(masterKey, entryName, salt){ return vaultDeriveSubKey(masterKey, salt, `SecuBox-Vault-Entry-v1:${entryName}`); }
+  function vaultManifestKey(masterKey, salt){ return vaultDeriveSubKey(masterKey, salt, 'SecuBox-Vault-Manifest-v1'); }
+  function vaultMacKey(masterKey, salt){ return vaultDeriveSubKey(masterKey, salt, 'SecuBox-Vault-MAC-v1'); }
 
   async function vaultEnc(data, keyBytes, aad){
     const key = await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, false, ['encrypt']);
@@ -1182,24 +1201,41 @@
       return new Vault(masterKey, crypto.getRandomValues(new Uint8Array(32)), new Map());
     }
     static async open(bytes, masterKey){
-      if(bytes.length < 32+32) throw new Error('Fichier trop court pour être un vault.');
+      if(bytes.length < VAULT_HEADER_SIZE + 4 + 32) throw new Error('Vault trop court ou corrompu.');
+      for(let i=0;i<4;i++){ if(bytes[i] !== VAULT_MAGIC[i]) throw new Error('Fichier non reconnu (magic invalide).'); }
+      const version = bytes[4];
+      const algo = bytes[5];
+      if(version !== VAULT_VERSION) throw new Error(`Version ${version} non supportée (attendu ${VAULT_VERSION}).`);
+      if(algo !== VAULT_ALG_AESGCM) throw new Error(`Algorithme ${algo} non supporté par cette page (attendu AES-256-GCM).`);
+
+      const salt = bytes.slice(8, 8+32);
+      const macKey = await vaultMacKey(masterKey, salt);
       const macRecv = bytes.slice(bytes.length-32);
       const payload = bytes.slice(0, bytes.length-32);
-      const macCalc = await vaultHmac(masterKey, payload);
+      const macCalc = await vaultHmac(macKey, payload);
       if(!vaultTimingSafeEqual(macRecv, macCalc)) throw new Error('Vault corrompu ou passphrase incorrecte.');
-      const salt = payload.slice(0,32);
-      const rest = payload.slice(32);
+
+      const rest = payload.slice(VAULT_HEADER_SIZE);
+      if(rest.length < 4) throw new Error('Vault tronqué (en-tête manifest manquant).');
       const mkey = await vaultManifestKey(masterKey, salt);
       const manifestSize = new DataView(rest.buffer, rest.byteOffset, 4).getUint32(0, false);
+      if(manifestSize > VAULT_MAX_MANIFEST_SIZE) throw new Error(`Manifest trop grand : ${manifestSize} > ${VAULT_MAX_MANIFEST_SIZE} — vault forgé ou corrompu.`);
+      if(rest.length < 4+manifestSize) throw new Error('Manifest tronqué.');
       const manifestEnc = rest.slice(4, 4+manifestSize);
       const manifestRaw = await vaultDec(manifestEnc, mkey, new TextEncoder().encode('manifest'));
       const manifest = JSON.parse(new TextDecoder().decode(manifestRaw));
+      const names = Object.keys(manifest);
+      if(names.length > VAULT_MAX_ENTRIES) throw new Error(`Trop d'entrées : ${names.length} > ${VAULT_MAX_ENTRIES}.`);
+
       let cursor = 4+manifestSize;
       const entries = new Map();
-      for(const name of Object.keys(manifest)){
+      for(const name of names){
         const meta = manifest[name];
+        if(cursor + 4 > rest.length) throw new Error(`Entrée '${name}' tronquée (en-tête).`);
         const entrySize = new DataView(rest.buffer, rest.byteOffset+cursor, 4).getUint32(0,false);
         cursor += 4;
+        if(entrySize > VAULT_MAX_ENTRY_SIZE) throw new Error(`Entrée '${name}' trop grande : ${entrySize} > ${VAULT_MAX_ENTRY_SIZE}.`);
+        if(cursor + entrySize > rest.length) throw new Error(`Entrée '${name}' tronquée (données).`);
         const entryEnc = rest.slice(cursor, cursor+entrySize);
         cursor += entrySize;
         const ekey = await vaultEntryKey(masterKey, name, salt);
@@ -1227,6 +1263,7 @@
     }
     async save(){
       const mkey = await vaultManifestKey(this.masterKey, this.salt);
+      const macKey = await vaultMacKey(this.masterKey, this.salt);
       const manifest = {};
       for(const [name,m] of this.entries) manifest[name] = {sha256:m.sha256, size:m.size};
       const manifestRaw = new TextEncoder().encode(JSON.stringify(manifest));
@@ -1247,14 +1284,21 @@
       const manifestSizeBuf = new Uint8Array(4);
       new DataView(manifestSizeBuf.buffer).setUint32(0, manifestEnc.length, false);
 
-      const payload = new Uint8Array(this.salt.length + 4 + manifestEnc.length + entriesBlob.length);
+      const header = new Uint8Array(VAULT_HEADER_SIZE);
+      header.set(VAULT_MAGIC, 0);
+      header[4] = VAULT_VERSION;
+      header[5] = VAULT_ALG_AESGCM;
+      header[6] = 0; header[7] = 0; // réservés
+      header.set(this.salt, 8);
+
+      const payload = new Uint8Array(header.length + 4 + manifestEnc.length + entriesBlob.length);
       let p2 = 0;
-      payload.set(this.salt, p2); p2 += this.salt.length;
+      payload.set(header, p2); p2 += header.length;
       payload.set(manifestSizeBuf, p2); p2 += 4;
       payload.set(manifestEnc, p2); p2 += manifestEnc.length;
       payload.set(entriesBlob, p2);
 
-      const mac = await vaultHmac(this.masterKey, payload);
+      const mac = await vaultHmac(macKey, payload);
       const out = new Uint8Array(payload.length+32);
       out.set(payload,0); out.set(mac,payload.length);
       return out;

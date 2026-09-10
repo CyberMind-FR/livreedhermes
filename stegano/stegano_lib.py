@@ -19,6 +19,23 @@ NOTE AUDIT : Confidentialité assurée par XChaCha20, pas par la géométrie.
 import json, os, secrets, struct, math
 from typing import List, Dict, Tuple, Optional
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF
+from cryptography.hazmat.primitives import hashes as _hashes
+
+def _xchacha_enc(key: bytes, plaintext: bytes, aad: bytes = b'') -> bytes:
+    """XChaCha20-Poly1305 : nonce 24 bytes. [A3]"""
+    nonce  = os.urandom(24)
+    subkey = _HKDF(_hashes.SHA256(), 32, salt=nonce[:16],
+                   info=b'XChaCha20-HChaCha20-subkey').derive(key)
+    ct = ChaCha20Poly1305(subkey).encrypt(b'\x00'*4 + nonce[16:], plaintext, aad or None)
+    return nonce + ct
+
+def _xchacha_dec(key: bytes, data: bytes, aad: bytes = b'') -> bytes:
+    """XChaCha20-Poly1305 déchiffrement. [A3]"""
+    nonce, ct = data[:24], data[24:]
+    subkey = _HKDF(_hashes.SHA256(), 32, salt=nonce[:16],
+                   info=b'XChaCha20-HChaCha20-subkey').derive(key)
+    return ChaCha20Poly1305(subkey).decrypt(b'\x00'*4 + nonce[16:], ct, aad or None)
 
 def _find_ref(name: str) -> str:
     _dir = os.path.dirname(os.path.abspath(__file__))
@@ -49,13 +66,11 @@ def _nibs_to_byte(hi: int, lo: int) -> int:
 # ── Chiffrement du message ────────────────────────────────────────────────────
 def _encrypt(message: str, steg_key: bytes) -> bytes:
     """
-    Chiffre avec XChaCha20-Poly1305.
-    Format : [4B longueur_inner][12B nonce][ciphertext+16B tag]
+    Chiffre avec XChaCha20-Poly1305 (nonce 24 bytes). [A3]
+    Format : [4B longueur_inner][inner = nonce(24) + ciphertext + tag(16)]
     """
     msg_b = message.upper().encode('ascii', errors='replace')
-    nonce = os.urandom(12)
-    ct    = ChaCha20Poly1305(steg_key).encrypt(nonce, msg_b, None)
-    inner = nonce + ct
+    inner = _xchacha_enc(steg_key, msg_b)
     return struct.pack('>I', len(inner)) + inner
 
 def _decrypt(vals: List[int], steg_key: bytes) -> str:
@@ -72,9 +87,8 @@ def _decrypt(vals: List[int], steg_key: bytes) -> str:
         raise ValueError(f"Positions insuffisantes : {len(vals)} < {need}")
     inner = bytes([_nibs_to_byte(vals[8+i*2], vals[8+i*2+1])
                    for i in range(inner_len)])
-    nonce, ct = inner[:12], inner[12:]
     try:
-        pt = ChaCha20Poly1305(steg_key).decrypt(nonce, ct, None)
+        pt = _xchacha_dec(steg_key, inner)
     except Exception:
         raise ValueError("Tag Poly1305 invalide — clé incorrecte ou données altérées")
     return pt.decode('ascii', errors='replace')
