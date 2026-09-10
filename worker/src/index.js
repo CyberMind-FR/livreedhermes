@@ -19,18 +19,51 @@
 
 import Stripe from 'stripe';
 
-function corsHeaders(env) {
+// CORRECTIF AUDIT — origine de confiance.
+// success_url et cancel_url étaient construites depuis l'en-tête Origin de
+// la requête. Cet en-tête est libre pour tout client hors navigateur : un
+// tiers pouvait créer une session de paiement authentique, au nom du vrai
+// marchand, dont la page de retour pointait chez lui — et récupérer ainsi
+// le session_id de qui payait. L'origine est désormais retenue seulement si
+// elle figure dans ALLOWED_ORIGIN ; sinon on retombe sur la première entrée
+// de cette liste, jamais sur ce que la requête annonce.
+//
+// ALLOWED_ORIGIN accepte plusieurs origines séparées par des virgules, pour
+// couvrir un éventuel www. ou un domaine de test, sans rien changer au cas
+// d'une valeur unique.
+function allowedOrigins(env) {
+  return String(env.ALLOWED_ORIGIN || '')
+    .split(',')
+    .map(o => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+}
+
+function resolveOrigin(request, env) {
+  const liste = allowedOrigins(env);
+  if (liste.length === 0) return null;
+  const annoncee = (request.headers.get('Origin') || '').trim().replace(/\/+$/, '');
+  return liste.includes(annoncee) ? annoncee : liste[0];
+}
+
+function corsHeaders(request, env) {
+  const liste = allowedOrigins(env);
+  // Aucune liste configurée : on conserve le comportement d'avant plutôt que
+  // de couper le site en silence. Une liste renseignée restreint réellement.
+  const origine = liste.length === 0 ? '*' : resolveOrigin(request, env);
   return {
-    'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
+    'Access-Control-Allow-Origin': origine,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
+    // La réponse dépend de l'en-tête Origin : sans Vary, un cache partagé
+    // servirait à un domaine l'autorisation calculée pour un autre.
+    'Vary': 'Origin',
   };
 }
 
-function json(data, status, env) {
+function json(data, status, request, env) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
-    headers: { 'Content-Type': 'application/json', ...corsHeaders(env) },
+    headers: { 'Content-Type': 'application/json', ...corsHeaders(request, env) },
   });
 }
 
@@ -46,7 +79,7 @@ async function handleCreateCheckoutSession(request, env) {
   try {
     body = await request.json();
   } catch (e) {
-    return json({ error: 'JSON invalide' }, 400, env);
+    return json({ error: 'JSON invalide' }, 400, request, env);
   }
 
   const amount = Math.round(Number(body.amount));
@@ -54,14 +87,17 @@ async function handleCreateCheckoutSession(request, env) {
   const minAmount = Number(env.STRIPE_MIN_AMOUNT_CENTS || 100);
 
   if (!Number.isFinite(amount) || amount < minAmount) {
-    return json({ error: `Montant minimum : ${(minAmount / 100).toFixed(2)} ${currency.toUpperCase()}` }, 400, env);
+    return json({ error: `Montant minimum : ${(minAmount / 100).toFixed(2)} ${currency.toUpperCase()}` }, 400, request, env);
   }
   // Garde-fou raisonnable contre une erreur de saisie (montant absurde).
   if (amount > 100000 * 100) {
-    return json({ error: 'Montant trop élevé' }, 400, env);
+    return json({ error: 'Montant trop élevé' }, 400, request, env);
   }
 
-  const origin = request.headers.get('Origin') || env.ALLOWED_ORIGIN;
+  const origin = resolveOrigin(request, env);
+  if (!origin) {
+    return json({ error: 'Service mal configuré : ALLOWED_ORIGIN absent' }, 500, request, env);
+  }
 
   try {
     const stripe = getStripe(env);
@@ -85,9 +121,9 @@ async function handleCreateCheckoutSession(request, env) {
       metadata: { tier: 'soutien' },
       integration_identifier: 'lldhsoutien' + Math.random().toString(36).slice(2, 10).padEnd(8, 'x'),
     });
-    return json({ url: session.url }, 200, env);
+    return json({ url: session.url }, 200, request, env);
   } catch (e) {
-    return json({ error: 'Erreur Stripe lors de la création de la session' }, 500, env);
+    return json({ error: 'Erreur Stripe lors de la création de la session' }, 500, request, env);
   }
 }
 
@@ -99,7 +135,10 @@ async function handleCreateCheckoutSession(request, env) {
 async function handleCreateProCheckoutSession(request, env) {
   const amount = Number(env.STRIPE_PRO_PRICE_CENTS || 9900);
   const currency = 'eur';
-  const origin = request.headers.get('Origin') || env.ALLOWED_ORIGIN;
+  const origin = resolveOrigin(request, env);
+  if (!origin) {
+    return json({ error: 'Service mal configuré : ALLOWED_ORIGIN absent' }, 500, request, env);
+  }
 
   try {
     const stripe = getStripe(env);
@@ -123,17 +162,25 @@ async function handleCreateProCheckoutSession(request, env) {
       metadata: { tier: 'pro' },
       integration_identifier: 'lldhpro' + Math.random().toString(36).slice(2, 10).padEnd(8, 'x'),
     });
-    return json({ url: session.url }, 200, env);
+    return json({ url: session.url }, 200, request, env);
   } catch (e) {
-    return json({ error: 'Erreur Stripe lors de la création de la session' }, 500, env);
+    return json({ error: 'Erreur Stripe lors de la création de la session' }, 500, request, env);
   }
 }
 
+// Fenêtre pendant laquelle un jeton déjà réclamé reste récupérable, en
+// secondes. Elle couvre les réessais légitimes — page de succès rechargée,
+// reçu Stripe ouvert depuis un second appareil — sans laisser un session_id
+// égaré ouvrir un accès des jours plus tard.
+const CLAIM_GRACE_SECONDS = 15 * 60;
+
 async function grantAccessForSession(env, sessionId, tier) {
   const token = crypto.randomUUID();
+  // Le jeton lui-même ne périme pas, et c'est voulu : l'accès est un achat
+  // unique. Lui donner une durée de vie révoquerait un accès payé.
   await env.SOUTIEN_KV.put(`token:${token}`, JSON.stringify({ createdAt: Date.now(), sessionId, tier }));
-  // Courte durée de vie : sert uniquement à la page de succès pour récupérer
-  // le jeton une fois, juste après le paiement.
+  // L'association session -> jeton, elle, est temporaire : elle ne sert qu'à
+  // remettre le jeton à l'acheteur juste après le paiement.
   await env.SOUTIEN_KV.put(`session:${sessionId}`, token, { expirationTtl: 60 * 60 * 24 });
   return token;
 }
@@ -169,11 +216,24 @@ async function handleWebhook(request, env) {
 async function handleClaimToken(request, env) {
   const url = new URL(request.url);
   const sessionId = url.searchParams.get('session_id');
-  if (!sessionId) return json({ error: 'session_id manquant' }, 400, env);
+  if (!sessionId) return json({ error: 'session_id manquant' }, 400, request, env);
 
   const token = await env.SOUTIEN_KV.get(`session:${sessionId}`);
-  if (!token) return json({ error: 'Session inconnue ou expirée' }, 404, env);
-  return json({ token }, 200, env);
+  if (!token) return json({ error: 'Session inconnue ou expirée' }, 404, request, env);
+
+  // CORRECTIF AUDIT — la remise du jeton n'était pas bornée.
+  // Le commentaire annonçait une récupération « une fois » ; le code laissait
+  // l'association vivre 24 h et la resservait indéfiniment. Or le session_id
+  // voyage dans l'URL de retour : historique du navigateur, en-tête Referer,
+  // journaux de serveur. Qui le récupérait obtenait un jeton perpétuel.
+  //
+  // La première réclamation réduit désormais l'association à une courte
+  // fenêtre de grâce, au lieu de la supprimer d'un coup : supprimer casserait
+  // le rechargement de la page de succès et l'ouverture du reçu Stripe depuis
+  // un autre appareil, deux gestes d'acheteur parfaitement légitimes.
+  await env.SOUTIEN_KV.put(`session:${sessionId}`, token, { expirationTtl: CLAIM_GRACE_SECONDS });
+
+  return json({ token }, 200, request, env);
 }
 
 async function handleVerifyAccess(request, env) {
@@ -183,16 +243,16 @@ async function handleVerifyAccess(request, env) {
   // valide pas un accès soutien, et inversement. Omis, on ne vérifie que
   // l'existence du jeton (compatibilité avec les appels déjà en place).
   const type = url.searchParams.get('type');
-  if (!token) return json({ valid: false }, 200, env);
+  if (!token) return json({ valid: false }, 200, request, env);
 
   const raw = await env.SOUTIEN_KV.get(`token:${token}`);
-  if (!raw) return json({ valid: false }, 200, env);
-  if (!type) return json({ valid: true }, 200, env);
+  if (!raw) return json({ valid: false }, 200, request, env);
+  if (!type) return json({ valid: true }, 200, request, env);
 
   let record;
   try { record = JSON.parse(raw); } catch (e) { record = {}; }
   const tokenTier = record.tier || 'soutien'; // jetons émis avant l'introduction du palier pro
-  return json({ valid: tokenTier === type }, 200, env);
+  return json({ valid: tokenTier === type }, 200, request, env);
 }
 
 export default {
@@ -200,7 +260,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders(env) });
+      return new Response(null, { headers: corsHeaders(request, env) });
     }
 
     try {
@@ -219,9 +279,9 @@ export default {
       if (url.pathname === '/verify-access' && request.method === 'GET') {
         return await handleVerifyAccess(request, env);
       }
-      return json({ error: 'Not found' }, 404, env);
+      return json({ error: 'Not found' }, 404, request, env);
     } catch (e) {
-      return json({ error: 'Erreur serveur' }, 500, env);
+      return json({ error: 'Erreur serveur' }, 500, request, env);
     }
   },
 };
