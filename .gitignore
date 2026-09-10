@@ -4,3 +4,6 @@ node_modules/
 !.env.example
 worker/.dev.vars
 worker/.wrangler
+
+__pycache__/
+*.py[cod]
