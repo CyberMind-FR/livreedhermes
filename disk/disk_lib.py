@@ -43,7 +43,7 @@ AVERTISSEMENT :
   La résistance globale du SPN comme PRP n'a pas été évaluée formellement.
 """
 
-import json, os, hmac as _hmac, hashlib, struct, itertools, math
+import json, os, hmac as _hmac, hashlib, struct, itertools
 from typing import List, Dict, Tuple, Optional
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF

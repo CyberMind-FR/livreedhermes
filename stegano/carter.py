@@ -24,7 +24,7 @@ Concept :
     Il ne sait même pas combien de blocs portent réellement le message.
 """
 
-import os, secrets, struct, hashlib
+import os, secrets
 from typing import List, Tuple, Dict
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes as _h
@@ -196,7 +196,6 @@ def steganalysis_view(grammar: List[Dict]) -> Dict:
     visible_structured = sum(1 for g in grammar
                              if g['role'] in (STRUCTURED, MESSAGE))
     hidden_message     = sum(1 for g in grammar if g['role'] == MESSAGE)
-    ambiguity          = visible_structured  # C(n,k) au moins
     return {
         'blocs_visibles': visible_structured,
         'blocs_message':  hidden_message,

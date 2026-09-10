@@ -27,7 +27,7 @@ Commandes :
   verify <grille.csv> <clés.json>  Vérifie une grille stégano
 """
 
-import argparse, sys, os, json, getpass, secrets
+import argparse, sys, os, json, getpass
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stegano_lib  import load_referents, encode, decode, grid_to_csv, csv_to_grid
