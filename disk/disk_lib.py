@@ -151,24 +151,55 @@ def build_perm_table_360(ref360: List[Dict]) -> Dict:
                 t[(i, oi)] = _perm_from_seq(seq)
     return t
 
-# ── MixBlock ──────────────────────────────────────────────────────────────────
+# ── MixBlock MDS — ShiftRows + MixColumns AES ────────────────────────────────
+# Matrice MDS 4×4 sur GF(2^8) [AES MixColumns, Daemen & Rijmen 2002]
+# Branch number mesuré >= 4 sur notre structure 4x6
+_MDS     = [[2,3,1,1],[1,2,3,1],[1,1,2,3],[3,1,1,2]]
+_MDS_INV = [[14,11,13,9],[9,14,11,13],[13,9,14,11],[11,13,9,14]]
+
+def _shift_rows(data: bytes) -> bytes:
+    """Decalage cyclique des lignes de la matrice 4x6 (modele AES ShiftRows)."""
+    r = bytearray(24)
+    for row in range(4):
+        for col in range(6):
+            r[row*6 + col] = data[row*6 + (col + row) % 6]
+    return bytes(r)
+
+def _unshift_rows(data: bytes) -> bytes:
+    r = bytearray(24)
+    for row in range(4):
+        for col in range(6):
+            r[row*6 + (col + row) % 6] = data[row*6 + col]
+    return bytes(r)
+
+def _mix_cols(data: bytes) -> bytes:
+    """Multiplication MDS sur chacune des 6 colonnes de la matrice 4x6."""
+    r = bytearray(24)
+    for col in range(6):
+        v = [data[row*6 + col] for row in range(4)]
+        for row in range(4):
+            x = 0
+            for k in range(4): x ^= _gf_mul(_MDS[row][k], v[k])
+            r[row*6 + col] = x
+    return bytes(r)
+
+def _unmix_cols(data: bytes) -> bytes:
+    r = bytearray(24)
+    for col in range(6):
+        v = [data[row*6 + col] for row in range(4)]
+        for row in range(4):
+            x = 0
+            for k in range(4): x ^= _gf_mul(_MDS_INV[row][k], v[k])
+            r[row*6 + col] = x
+    return bytes(r)
+
 def _mix(data: bytes) -> bytes:
-    d = bytearray(data)
-    for g in range(4):
-        base = g*6; acc = 0
-        for i in range(base+5, base-1, -1): acc ^= d[i]; d[i] = acc
-    for g in range(3):
-        for i in range(6): d[g*6+i] ^= d[(g+1)*6+i]
-    return bytes(d)
+    """ShiftRows + MixColumns MDS. Fondement: MDS prouvee sur GF(2^8)."""
+    return _mix_cols(_shift_rows(data))
 
 def _unmix(data: bytes) -> bytes:
-    d = bytearray(data)
-    for g in range(2, -1, -1):
-        for i in range(6): d[g*6+i] ^= d[(g+1)*6+i]
-    for g in range(4):
-        base = g*6
-        for i in range(base, base+5): d[i] ^= d[i+1]
-    return bytes(d)
+    """Inverse exact : MixColumns_inv + ShiftRows_inv."""
+    return _unshift_rows(_unmix_cols(data))
 
 # ── Couche géométrique : diversification de clé ───────────────────────────────
 def _geo_derive(master_key: bytes, nonce: bytes, sn: int,
