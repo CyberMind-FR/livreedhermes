@@ -107,7 +107,6 @@
   .enc-progress{ height:8px; border:1px solid var(--line); margin-top:14px; overflow:hidden; display:none; }
   .enc-progress.active{ display:block; }
   .enc-progress-bar{ height:100%; width:0%; background:var(--gold); transition:width .15s linear; }
-  .disk-fingerprint{ font-family:monospace; font-size:12px; color:var(--gold); margin-top:10px; word-break:break-all; }
   .disk-stats div{ margin-bottom:6px; }
   .disk-stats div:last-child{ margin-bottom:0; }
   .disk-stats b{ color:var(--gold); font-weight:400; }
@@ -223,8 +222,6 @@
                 </select>
               </div>
             </div>
-            <label class="enc-label">Graine aléatoire (optionnel)</label>
-            <input type="text" class="enc-input" id="enc-seed" placeholder="Laisser vide pour aléatoire">
             <button type="button" class="enc-btn" id="btnEncode">Encoder</button>
             <div id="enc-result" hidden>
               <div class="enc-info-box" id="enc-info"></div>
@@ -254,8 +251,6 @@
             <textarea class="enc-textarea" id="dec-grid" placeholder="1,23,5,14,2,..."></textarea>
             <label class="enc-label">Les 4 clés (JSON — {keyASeed, keyB, keyC, key2, gridSize})</label>
             <textarea class="enc-textarea" id="dec-keys" placeholder='{"keyASeed":123,"keyB":[1,1,...],"keyC":[[0,3,...],...],"key2":[{"form_id":42,"color":"blue"},...],"gridSize":60}' style="min-height:110px"></textarea>
-            <label class="enc-label">Longueur du message (optionnel)</label>
-            <input type="number" class="enc-input" id="dec-len" placeholder="Laisser vide pour tout décoder">
             <button type="button" class="enc-btn" id="btnDecode">Décoder</button>
             <div id="dec-result" hidden>
               <div class="enc-result-box" id="dec-msg"></div>
@@ -312,12 +307,11 @@
 
           <div id="disk-app" hidden>
             <div class="enc-card">
-              <h2>Chiffrement géométrique — Référent 256</h2>
-              <p class="ref-note">Réseau de substitution-permutation (SPN) à trois couches par bloc de 24 octets — substitution (S-box géométrique), permutation (croix ansée) et masque XOR — toutes dérivées par PBKDF2/SHA-256 depuis une passphrase. Distinct de l'outil de stéganographie ci-dessus. Entièrement côté client : la passphrase et les fichiers ne quittent jamais le navigateur.</p>
+              <h2>Chiffrement géométrique — Double Référent 256+360</h2>
+              <p class="ref-note">Réseau de substitution-permutation (SPN) à 5 couches par tour, sur 4 tours par bloc de 24 octets — S-box géométrique GF(2⁸), permutation Ref256, diffusion MixBlock, permutation Ref360, masque XOR — toutes dérivées par PBKDF2/SHA-256 depuis une passphrase et un sel aléatoire propre à chaque fichier. Authentifié par HMAC-SHA256 : une passphrase incorrecte ou un fichier altéré sont détectés, jamais rendus en bruit silencieux. Distinct de l'outil de stéganographie ci-dessus. Entièrement côté client : la passphrase et les fichiers ne quittent jamais le navigateur.</p>
               <label class="enc-label">Passphrase</label>
               <input type="password" class="enc-input" id="disk-passphrase" placeholder="Votre passphrase" autocomplete="off">
-              <button type="button" class="enc-btn secondary" id="btnDeriveKey">🔑 Dériver la clé</button>
-              <div id="disk-fingerprint" class="disk-fingerprint"></div>
+              <p class="ref-note" style="margin-top:8px">Saisie une seule fois, utilisée directement par les boutons Chiffrer et Déchiffrer ci-dessous.</p>
             </div>
 
             <div class="enc-card">
@@ -336,7 +330,7 @@
               <div class="disk-file-info" id="disk-decrypt-info"></div>
               <button type="button" class="enc-btn" id="btnDiskDecrypt">Déchiffrer →</button>
               <div class="enc-progress" id="disk-decrypt-progress"><div class="enc-progress-bar" id="disk-decrypt-progress-bar"></div></div>
-              <p class="ref-note" style="margin-top:12px">Si la clé est incorrecte, le fichier déchiffré sera du bruit, sans erreur détectable (pas de MAC dans cette version).</p>
+              <p class="ref-note" style="margin-top:12px">Une passphrase incorrecte ou un fichier altéré déclenchent une erreur explicite (vérification HMAC-SHA256) plutôt que de produire du bruit silencieux.</p>
             </div>
 
             <div class="enc-card">
@@ -352,6 +346,9 @@
                 <div><b>Bits/secteur</b> : ≈ 2^159 432 (21 chunks/secteur)</div>
                 <div><b>AES-256</b> : 2^256</div>
                 <div><b>Avantage</b> : +2^159 176 bits/secteur</div>
+                <div><b>Dérivation de clé</b> : PBKDF2-SHA256, 200 000 itérations, sel aléatoire de 128 bits propre à chaque fichier</div>
+                <div><b>Nonce</b> : 128 bits (aléatoire par fichier) — sous-clés uniques même à passphrase et sel identiques</div>
+                <div><b>Intégrité</b> : HMAC-SHA256 (256 bits) — détecte toute altération ou passphrase incorrecte</div>
               </div>
             </div>
 
@@ -450,6 +447,25 @@
     return ()=>{ s=(s*1664525+1013904223)&0xFFFFFFFF; return (s>>>0)/2**32; };
   }
 
+  // Entiers uniformes cryptographiquement sûrs par rejet (pas de biais modulo)
+  // — porté depuis stegano_lib.py::secrets.randbelow, pour le bruit de grille
+  // et la génération des clés B/C/2 (Clé A garde mkRng, voir plus bas).
+  function stegRandomInts(count, maxExclusive){
+    const maxUint32 = 0x100000000;
+    const limit = maxUint32 - (maxUint32 % maxExclusive);
+    const out = new Array(count);
+    let i = 0;
+    while(i < count){
+      const batch = crypto.getRandomValues(new Uint32Array(Math.max(64, count-i)));
+      for(let b=0;b<batch.length && i<count;b++){
+        if(batch[b] < limit) out[i++] = batch[b] % maxExclusive;
+      }
+    }
+    return out;
+  }
+  function stegRandomInt(maxExclusive){ return stegRandomInts(1, maxExclusive)[0]; }
+  function stegRandomChoice(arr){ return arr[stegRandomInt(arr.length)]; }
+
   // ============================================================
   // Stéganographie géométrique — système à 4 clés (stegano_lib.py porté en JS)
   // Clé A : mélange secret du Référent 256 (permutation Fisher-Yates seedée).
@@ -486,6 +502,11 @@
     return order;
   }
 
+  // Clé A garde le RNG seedable de ce fichier (mkRng), pas le random.Random
+  // de Python : cohérent avec l'implémentation JS de référence déjà fournie,
+  // mais non bit-compatible avec random.shuffle() côté Python — les deux
+  // implémentations sont indépendamment auto-cohérentes, pas interchangeables
+  // clé pour clé (voir aussi la note en tête de section).
   function stegShuffleReferent(ref, seed){
     const rng = mkRng(seed);
     const arr = ref.slice();
@@ -496,12 +517,42 @@
     return arr;
   }
 
-  function stegEncode(message, keyASeed, keyB, keyC, key2, ref256, gridSize=60, valueRange=44, seed=null){
+  const VALID_K = [1,2,3,5];
+  function stegValidateK(k){
+    if(!VALID_K.includes(k)) throw new Error(`Taille de bloc k=${k} invalide. Valeurs autorisées : ${VALID_K.join(', ')}`);
+  }
+
+  // Nombre maximal de caractères encodables (hors header de longueur, -2).
+  function stegMaxCapacity(keyB, gridSize=60){
+    const B = Math.floor(gridSize/6);
+    const order = stegZigzagBlocks(B);
+    let nPositions = 0, posI = 0;
+    for(const k of keyB){
+      if(posI >= order.length) break;
+      const nSub = k*k;
+      const available = Math.min(nSub, order.length - posI);
+      nPositions += available*6;
+      posI += available;
+    }
+    return Math.max(0, nPositions - 2);
+  }
+
+  // Les 2 premiers caractères encodés = longueur du message (base ALPHABET.length,
+  // big-endian), le reste est lu par le décodeur sans avoir besoin qu'on lui
+  // redonne la longueur — porté depuis stegano_lib.py v2 (encode/decode).
+  function stegEncode(message, keyASeed, keyB, keyC, key2, ref256, gridSize=60){
+    keyB.forEach(stegValidateK);
+    const cap = stegMaxCapacity(keyB, gridSize);
+    const msgUpper = message.toUpperCase();
+    if(msgUpper.length > cap) throw new Error(`Message trop long : ${msgUpper.length} caractères, capacité maximale : ${cap}`);
     const N=gridSize, B=Math.floor(N/6);
-    const rng = mkRng(seed);
-    const grid = Array.from({length:N},()=>Array.from({length:N},()=>Math.floor(rng()*valueRange)+1));
     const refS = stegShuffleReferent(ref256, keyASeed);
-    const msgNums = message.toUpperCase().split('').map(charToNum);
+    const flatNoise = stegRandomInts(N*N, ALPHABET.length);
+    const grid = [];
+    for(let r=0;r<N;r++) grid.push(flatNoise.slice(r*N, (r+1)*N));
+    const msgLenVal = msgUpper.length;
+    const headerNums = [Math.floor(msgLenVal/ALPHABET.length), msgLenVal % ALPHABET.length];
+    const msgNums = headerNums.concat(msgUpper.split('').map(charToNum));
     let msgIdx=0;
     const order = stegZigzagBlocks(B);
     let posI=0, blockI=0;
@@ -527,6 +578,7 @@
   }
 
   function stegDecode(grid, keyASeed, keyB, keyC, key2, ref256, gridSize=60){
+    keyB.forEach(stegValidateK);
     const N=gridSize, B=Math.floor(N/6);
     const refS = stegShuffleReferent(ref256, keyASeed);
     const nums=[];
@@ -549,17 +601,23 @@
       }
       blockI++;
     }
-    return nums.map(numToChar).join('');
+    if(nums.length < 2) throw new Error('Grille trop petite pour contenir un header de longueur.');
+    const mod = (x,m) => ((x % m) + m) % m;
+    const h0 = mod(nums[0], ALPHABET.length), h1 = mod(nums[1], ALPHABET.length);
+    const msgLen = h0*ALPHABET.length + h1;
+    const cap = stegMaxCapacity(keyB, gridSize);
+    if(msgLen > cap) throw new Error(`Longueur décodée ${msgLen} > capacité ${cap} — clé incorrecte ?`);
+    return nums.slice(2, 2+msgLen).map(numToChar).join('');
   }
 
-  function stegMakeKeys(ref256, gridSize=60, blockSize=1, seed=null){
-    const rng = mkRng(seed);
+  function stegMakeKeys(ref256, gridSize=60, blockSize=1){
+    stegValidateK(blockSize);
     const B = Math.floor(gridSize/6);
     const nBlocks = B*B;
-    const keyASeed = Math.floor(rng()*(2**31));
+    const keyASeed = stegRandomInt(2**31);
     const keyB = Array(nBlocks).fill(blockSize);
-    const keyC = Array.from({length:nBlocks},()=>Array.from({length:blockSize*blockSize},()=>Math.floor(rng()*8)));
-    const key2 = Array.from({length:nBlocks},()=>({form_id:Math.floor(rng()*ref256.length), color: rng()>0.5?'blue':'orange'}));
+    const keyC = Array.from({length:nBlocks},()=>stegRandomInts(blockSize*blockSize, 8));
+    const key2 = Array.from({length:nBlocks},()=>({form_id: stegRandomInt(ref256.length), color: stegRandomChoice(['blue','orange'])}));
     return {keyASeed, keyB, keyC, key2};
   }
 
@@ -624,9 +682,9 @@
   function runDemo(){
     if(!REF256) return;
     const msg='ANIBALAMIOTX';
-    const {keyASeed, keyB, keyC, key2} = stegMakeKeys(REF256, 60, 1, 42);
-    const grid = stegEncode(msg, keyASeed, keyB, keyC, key2, REF256, 60, 44, 42);
-    const decoded = stegDecode(grid, keyASeed, keyB, keyC, key2, REF256, 60).substring(0, msg.length);
+    const {keyASeed, keyB, keyC, key2} = stegMakeKeys(REF256, 60, 1);
+    const grid = stegEncode(msg, keyASeed, keyB, keyC, key2, REF256, 60);
+    const decoded = stegDecode(grid, keyASeed, keyB, keyC, key2, REF256, 60);
     const ks = stegKeyspace(keyB, REF256);
     _lastGrid=grid; _lastKeys={keyASeed, keyB, keyC, key2, gridSize:60};
     document.getElementById('demo-result').hidden=false;
@@ -642,14 +700,21 @@
 
   function encodeMessage(){
     if(!REF256) return;
+    const infoEl = document.getElementById('enc-info');
+    const resultEl = document.getElementById('enc-result');
     const msg=document.getElementById('enc-message').value.trim().toUpperCase();
-    if(!msg){ document.getElementById('enc-info').textContent='Entrez un message.'; return; }
+    if(!msg){ resultEl.hidden=false; infoEl.textContent='Entrez un message.'; return; }
     const N=parseInt(document.getElementById('enc-grid').value);
     const blockSize=parseInt(document.getElementById('enc-mode').value);
-    const seedVal=document.getElementById('enc-seed').value.trim();
-    const seed=seedVal?parseInt(seedVal):null;
-    const {keyASeed, keyB, keyC, key2} = stegMakeKeys(REF256, N, blockSize, seed);
-    const grid = stegEncode(msg, keyASeed, keyB, keyC, key2, REF256, N, 44, seed);
+    let keyASeed, keyB, keyC, key2, grid;
+    try{
+      ({keyASeed, keyB, keyC, key2} = stegMakeKeys(REF256, N, blockSize));
+      grid = stegEncode(msg, keyASeed, keyB, keyC, key2, REF256, N);
+    }catch(e){
+      resultEl.hidden=false;
+      infoEl.textContent = 'Erreur : ' + e.message;
+      return;
+    }
     _lastGrid=grid; _lastKeys={keyASeed, keyB, keyC, key2, gridSize:N};
     const ks = stegKeyspace(keyB, REF256);
     document.getElementById('enc-result').hidden=false;
@@ -680,13 +745,11 @@
     const resultEl = document.getElementById('dec-msg');
     const csvStr=document.getElementById('dec-grid').value.trim();
     const keysStr=document.getElementById('dec-keys').value.trim();
-    const lenVal=document.getElementById('dec-len').value.trim();
     if(!csvStr||!keysStr){ resultEl.textContent='Remplis la grille et les clés.'; document.getElementById('dec-result').hidden=false; return; }
     try{
       const grid=csvStr.split('\n').map(r=>r.split(',').map(Number));
       const keys=JSON.parse(keysStr);
-      let msg=stegDecode(grid, keys.keyASeed, keys.keyB, keys.keyC, keys.key2, REF256, keys.gridSize || grid.length);
-      if(lenVal) msg=msg.substring(0,parseInt(lenVal));
+      const msg=stegDecode(grid, keys.keyASeed, keys.keyB, keys.keyC, keys.key2, REF256, keys.gridSize || grid.length);
       document.getElementById('dec-result').hidden=false;
       resultEl.innerHTML=`Message décodé : <span class="enc-msg">${msg}</span>`;
     } catch(e){
@@ -785,14 +848,21 @@
   // géométriques Ref256 + Ref360, XOR keystream)
   // ============================================================
   let diskTables = null;
-  let diskMasterKey = null;
 
   const DISK_SECTOR_SIZE = 512;
   const DISK_CHUNK_SIZE  = 24;
   const DISK_CHUNKS_FULL = 21;  // Math.floor(512/24)
   const DISK_TAIL_SIZE   = 8;   // 512 % 24
   const DISK_N_ROUNDS    = 4;
+  const DISK_NONCE_SIZE  = 16;
+  const DISK_SALT_SIZE   = 16;
+  const DISK_MAC_SIZE    = 32;
 
+  // Génère les 24 permutations de [0,1,2,3] en ordre lexicographique, pour
+  // correspondre exactement à itertools.permutations(range(4)) côté Python —
+  // requis depuis que build_perm_table_256 applique réellement le décalage
+  // géométrique (dr,dc) par sous-bloc (voir plus bas), ce qui rend l'ordre
+  // d'énumération significatif pour la permutation résultante.
   const DISK_ALL_ORDERS = (() => {
     const perms = [];
     const a = [0,1,2,3];
@@ -804,8 +874,14 @@
         [arr[l],arr[i]]=[arr[i],arr[l]];
       }
     }
-    permute(a); return perms;
+    permute(a);
+    perms.sort((x,y)=>{
+      for(let i=0;i<x.length;i++){ if(x[i]!==y[i]) return x[i]-y[i]; }
+      return 0;
+    });
+    return perms;
   })();
+  const DISK_OFFSETS_12 = [[0,0],[0,6],[6,0],[6,6]];
   const DISK_COLOR_ORDERS = [
     ['C1','C2','C3'],['C1','C3','C2'],['C2','C1','C3'],
     ['C2','C3','C1'],['C3','C1','C2'],['C3','C2','C1']
@@ -936,7 +1012,8 @@
         for(const [col, ck] of [[0,'blue'],[1,'orange']]){
           const seqAbs = [];
           for(const slot of DISK_ALL_ORDERS[oi]){
-            for(const [r,c] of form[ck]) seqAbs.push(r*12+c);
+            const [dr,dc] = DISK_OFFSETS_12[slot];
+            for(const [r,c] of form[ck]) seqAbs.push((r+dr)*12+(c+dc));
           }
           pt256.set(`${form.id},${oi},${col}`, diskPermFromSeq(seqAbs));
         }
@@ -961,10 +1038,12 @@
     return { pt256, pt360, pt360Keys, n360: ref360.length };
   }
 
-  // ── Dérivation des paramètres par tour ─────────────────────────────────────
-  async function diskDeriveRound(masterKey, sn, cn, rnd, n360){
-    const salt = new Uint8Array(20);
-    const sv = new DataView(salt.buffer);
+  // ── Dérivation des paramètres par tour (le nonce entre dans le sel/seed :
+  // chaque chiffrement a des sous-clés uniques même à passphrase identique) ──
+  async function diskDeriveRound(masterKey, sn, cn, rnd, nonce, n360){
+    const salt = new Uint8Array(DISK_NONCE_SIZE + 20);
+    salt.set(nonce, 0);
+    const sv = new DataView(salt.buffer, DISK_NONCE_SIZE, 20);
     sv.setBigUint64(0, BigInt(sn), false);
     sv.setUint32(8, cn, false);
     sv.setUint32(12, rnd, false);
@@ -979,9 +1058,10 @@
     const idx360 = dk[28] % n360;
     const oi360 = dk[29] % 6;
 
-    const seedInput = new Uint8Array(masterKey.length + 20);
+    const seedInput = new Uint8Array(masterKey.length + DISK_NONCE_SIZE + 20);
     seedInput.set(masterKey, 0);
-    const siView = new DataView(seedInput.buffer, masterKey.length, 20);
+    seedInput.set(nonce, masterKey.length);
+    const siView = new DataView(seedInput.buffer, masterKey.length + DISK_NONCE_SIZE, 20);
     siView.setBigUint64(0, BigInt(sn), false);
     siView.setUint32(8, cn, false);
     siView.setUint32(12, rnd, false);
@@ -1000,9 +1080,10 @@
     return key;
   }
 
-  async function diskDeriveTailKey(masterKey, sectorNum){
-    const salt = new Uint8Array(12);
-    const view = new DataView(salt.buffer);
+  async function diskDeriveTailKey(masterKey, sectorNum, nonce){
+    const salt = new Uint8Array(DISK_NONCE_SIZE + 12);
+    salt.set(nonce, 0);
+    const view = new DataView(salt.buffer, DISK_NONCE_SIZE, 12);
     view.setBigUint64(0, BigInt(sectorNum), false);
     view.setUint32(8, 99, false);
     const keyMaterial = await crypto.subtle.importKey('raw', masterKey, {name:'PBKDF2'}, false, ['deriveBits']);
@@ -1013,10 +1094,10 @@
   // SPN 5 couches par tour, 4 tours : 1) S-box GF 2) permutation géo Ref256
   // 3) MixBlock 4) permutation géo Ref360 5) XOR keystream — déchiffrement
   // dans l'ordre strictement inverse, tours en ordre inverse.
-  async function diskEncChunk(chunk, masterKey, sn, cn, tables, nRounds){
+  async function diskEncChunk(chunk, masterKey, sn, cn, nonce, tables, nRounds){
     let data = new Uint8Array(chunk);
     for(let rnd=0; rnd<nRounds; rnd++){
-      const {cfg256, oi256, col256, xk, sbox, idx360, oi360} = await diskDeriveRound(masterKey, sn, cn, rnd, tables.n360);
+      const {cfg256, oi256, col256, xk, sbox, idx360, oi360} = await diskDeriveRound(masterKey, sn, cn, rnd, nonce, tables.n360);
       const [P256] = tables.pt256.get(`${cfg256},${oi256},${col256}`);
       const [P360] = tables.pt360.get(diskResolve360Key(tables, idx360, oi360));
       const sub = new Uint8Array(24);
@@ -1033,10 +1114,10 @@
     return data;
   }
 
-  async function diskDecChunk(chunk, masterKey, sn, cn, tables, nRounds){
+  async function diskDecChunk(chunk, masterKey, sn, cn, nonce, tables, nRounds){
     let data = new Uint8Array(chunk);
     for(let rnd=nRounds-1; rnd>=0; rnd--){
-      const {cfg256, oi256, col256, xk, sboxInv, idx360, oi360} = await diskDeriveRound(masterKey, sn, cn, rnd, tables.n360);
+      const {cfg256, oi256, col256, xk, sboxInv, idx360, oi360} = await diskDeriveRound(masterKey, sn, cn, rnd, nonce, tables.n360);
       const [, Pi256] = tables.pt256.get(`${cfg256},${oi256},${col256}`);
       const [, Pi360] = tables.pt360.get(diskResolve360Key(tables, idx360, oi360));
       const unxor = new Uint8Array(24);
@@ -1053,81 +1134,102 @@
     return data;
   }
 
-  async function diskEncryptSector(data, sectorNum, masterKey, tables, nRounds=DISK_N_ROUNDS){
+  async function diskEncryptSector(data, sectorNum, masterKey, nonce, tables, nRounds=DISK_N_ROUNDS){
     const out = new Uint8Array(DISK_SECTOR_SIZE);
     for(let ci=0; ci<DISK_CHUNKS_FULL; ci++){
       const chunk = data.slice(ci*DISK_CHUNK_SIZE, (ci+1)*DISK_CHUNK_SIZE);
-      const enc = await diskEncChunk(chunk, masterKey, sectorNum, ci, tables, nRounds);
+      const enc = await diskEncChunk(chunk, masterKey, sectorNum, ci, nonce, tables, nRounds);
       out.set(enc, ci*DISK_CHUNK_SIZE);
     }
-    const tailKey = await diskDeriveTailKey(masterKey, sectorNum);
+    const tailKey = await diskDeriveTailKey(masterKey, sectorNum, nonce);
     const tail = data.slice(DISK_CHUNKS_FULL*DISK_CHUNK_SIZE);
     for(let i=0;i<DISK_TAIL_SIZE;i++) out[DISK_CHUNKS_FULL*DISK_CHUNK_SIZE+i] = tail[i] ^ tailKey[i];
     return out;
   }
 
-  async function diskDecryptSector(data, sectorNum, masterKey, tables, nRounds=DISK_N_ROUNDS){
+  async function diskDecryptSector(data, sectorNum, masterKey, nonce, tables, nRounds=DISK_N_ROUNDS){
     const out = new Uint8Array(DISK_SECTOR_SIZE);
     for(let ci=0; ci<DISK_CHUNKS_FULL; ci++){
       const chunk = data.slice(ci*DISK_CHUNK_SIZE, (ci+1)*DISK_CHUNK_SIZE);
-      const dec = await diskDecChunk(chunk, masterKey, sectorNum, ci, tables, nRounds);
+      const dec = await diskDecChunk(chunk, masterKey, sectorNum, ci, nonce, tables, nRounds);
       out.set(dec, ci*DISK_CHUNK_SIZE);
     }
-    const tailKey = await diskDeriveTailKey(masterKey, sectorNum);
+    const tailKey = await diskDeriveTailKey(masterKey, sectorNum, nonce);
     const tail = data.slice(DISK_CHUNKS_FULL*DISK_CHUNK_SIZE);
     for(let i=0;i<DISK_TAIL_SIZE;i++) out[DISK_CHUNKS_FULL*DISK_CHUNK_SIZE+i] = tail[i] ^ tailKey[i];
     return out;
   }
 
-  async function diskEncryptFile(fileData, masterKey, tables, onProgress){
+  function diskTimingSafeEqual(a, b){
+    if(a.length !== b.length) return false;
+    let diff = 0;
+    for(let i=0;i<a.length;i++) diff |= a[i]^b[i];
+    return diff === 0;
+  }
+
+  async function diskHmacSha256(key, data){
+    const k = await crypto.subtle.importKey('raw', key, {name:'HMAC', hash:'SHA-256'}, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', k, data);
+    return new Uint8Array(sig);
+  }
+
+  // Format de sortie : [16B nonce][secteurs chiffrés][32B HMAC-SHA256] — le
+  // nonce garantit des sous-clés uniques par fichier, le MAC détecte toute
+  // altération ou passphrase incorrecte au lieu de rendre du bruit silencieux.
+  async function diskEncrypt(fileData, masterKey, tables, onProgress){
     const originalLen = fileData.byteLength;
-    const padLen = (DISK_SECTOR_SIZE - originalLen % DISK_SECTOR_SIZE) % DISK_SECTOR_SIZE;
-    const padded = new Uint8Array(originalLen + padLen);
-    padded.set(new Uint8Array(fileData));
+    const padLen = (DISK_SECTOR_SIZE - (8+originalLen) % DISK_SECTOR_SIZE) % DISK_SECTOR_SIZE;
+    const padded = new Uint8Array(8 + originalLen + padLen);
+    new DataView(padded.buffer).setBigUint64(0, BigInt(originalLen), false);
+    padded.set(new Uint8Array(fileData), 8);
     const nSectors = padded.length / DISK_SECTOR_SIZE;
-    const outBuf = new Uint8Array(8 + nSectors * DISK_SECTOR_SIZE);
-    new DataView(outBuf.buffer).setBigUint64(0, BigInt(originalLen), false);
+    const nonce = crypto.getRandomValues(new Uint8Array(DISK_NONCE_SIZE));
+    const ciphertext = new Uint8Array(nSectors * DISK_SECTOR_SIZE);
     for(let s=0; s<nSectors; s++){
       const sector = padded.slice(s*DISK_SECTOR_SIZE, (s+1)*DISK_SECTOR_SIZE);
-      const enc = await diskEncryptSector(sector, s, masterKey, tables);
-      outBuf.set(enc, 8 + s*DISK_SECTOR_SIZE);
+      const enc = await diskEncryptSector(sector, s, masterKey, nonce, tables);
+      ciphertext.set(enc, s*DISK_SECTOR_SIZE);
       if(onProgress) onProgress(Math.round((s+1)/nSectors*100));
     }
-    return outBuf;
+    const payload = new Uint8Array(DISK_NONCE_SIZE + ciphertext.length);
+    payload.set(nonce, 0);
+    payload.set(ciphertext, DISK_NONCE_SIZE);
+    const mac = await diskHmacSha256(masterKey, payload);
+    const out = new Uint8Array(payload.length + DISK_MAC_SIZE);
+    out.set(payload, 0);
+    out.set(mac, payload.length);
+    return out;
   }
 
-  async function diskDecryptFile(encData, masterKey, tables, onProgress){
-    const view = new DataView(encData.buffer, encData.byteOffset, encData.byteLength);
-    const originalLen = Number(view.getBigUint64(0, false));
-    const payload = encData.slice(8);
-    const nSectors = payload.length / DISK_SECTOR_SIZE;
-    const outBuf = new Uint8Array(nSectors * DISK_SECTOR_SIZE);
+  async function diskDecrypt(data, masterKey, tables, onProgress){
+    if(data.length < DISK_NONCE_SIZE + DISK_MAC_SIZE) throw new Error('Données trop courtes.');
+    const macRecv = data.slice(data.length - DISK_MAC_SIZE);
+    const payload = data.slice(0, data.length - DISK_MAC_SIZE);
+    const macCalc = await diskHmacSha256(masterKey, payload);
+    if(!diskTimingSafeEqual(macRecv, macCalc)) throw new Error('MAC invalide — fichier altéré ou passphrase incorrecte.');
+    const nonce = payload.slice(0, DISK_NONCE_SIZE);
+    const ciphertext = payload.slice(DISK_NONCE_SIZE);
+    if(ciphertext.length % DISK_SECTOR_SIZE !== 0) throw new Error('Longueur chiffrée invalide.');
+    const nSectors = ciphertext.length / DISK_SECTOR_SIZE;
+    const plaintext = new Uint8Array(nSectors * DISK_SECTOR_SIZE);
     for(let s=0; s<nSectors; s++){
-      const sector = payload.slice(s*DISK_SECTOR_SIZE, (s+1)*DISK_SECTOR_SIZE);
-      const dec = await diskDecryptSector(sector, s, masterKey, tables);
-      outBuf.set(dec, s*DISK_SECTOR_SIZE);
+      const sector = ciphertext.slice(s*DISK_SECTOR_SIZE, (s+1)*DISK_SECTOR_SIZE);
+      const dec = await diskDecryptSector(sector, s, masterKey, nonce, tables);
+      plaintext.set(dec, s*DISK_SECTOR_SIZE);
       if(onProgress) onProgress(Math.round((s+1)/nSectors*100));
     }
-    return outBuf.slice(0, originalLen);
+    const originalLen = Number(new DataView(plaintext.buffer).getBigUint64(0, false));
+    return plaintext.slice(8, 8+originalLen);
   }
 
-  async function diskPassphraseToKey(passphrase){
-    const salt = new TextEncoder().encode('LaLivreeDHermes2026');
+  // Dérive la clé maître depuis la passphrase avec un sel — sel aléatoire et
+  // propre à chaque fichier au chiffrement (embarqué en tête de sortie), sel
+  // lu depuis le fichier au déchiffrement : la passphrase seule ne suffit
+  // jamais à reproduire la clé sans connaître ce sel.
+  async function diskPassphraseToKey(passphrase, salt){
     const keyMat = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), {name:'PBKDF2'}, false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:100000, hash:'SHA-256'}, keyMat, 256);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:200000, hash:'SHA-256'}, keyMat, 256);
     return new Uint8Array(bits);
-  }
-
-  function bytesToHex(bytes){
-    return Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join('');
-  }
-
-  async function onDeriveKey(){
-    const statusEl = document.getElementById('disk-fingerprint');
-    const pass = document.getElementById('disk-passphrase').value;
-    if(!pass){ statusEl.textContent = 'Entrez une passphrase.'; return; }
-    diskMasterKey = await diskPassphraseToKey(pass);
-    statusEl.textContent = 'Empreinte de la clé : ' + bytesToHex(diskMasterKey.slice(0,8));
   }
 
   function diskSetProgress(barId, wrapId, pct){
@@ -1139,13 +1241,19 @@
   async function onDiskEncrypt(){
     const infoEl = document.getElementById('disk-encrypt-info');
     if(!diskTables){ infoEl.textContent = 'Tables de permutation en cours d\'initialisation, réessaie dans un instant.'; return; }
-    if(!diskMasterKey){ infoEl.textContent = 'Dérive la clé avant de chiffrer.'; return; }
+    const pass = document.getElementById('disk-passphrase').value;
+    if(!pass){ infoEl.textContent = 'Entre une passphrase.'; return; }
     const input = document.getElementById('disk-file-encrypt');
     if(!input.files[0]){ infoEl.textContent = 'Choisis un fichier.'; return; }
     const file = input.files[0];
     const buf = new Uint8Array(await file.arrayBuffer());
     diskSetProgress('disk-encrypt-progress-bar','disk-encrypt-progress',0);
-    const out = await diskEncryptFile(buf, diskMasterKey, diskTables, pct=>diskSetProgress('disk-encrypt-progress-bar','disk-encrypt-progress',pct));
+    const salt = crypto.getRandomValues(new Uint8Array(DISK_SALT_SIZE));
+    const masterKey = await diskPassphraseToKey(pass, salt);
+    const encBody = await diskEncrypt(buf, masterKey, diskTables, pct=>diskSetProgress('disk-encrypt-progress-bar','disk-encrypt-progress',pct));
+    const out = new Uint8Array(DISK_SALT_SIZE + encBody.length);
+    out.set(salt, 0);
+    out.set(encBody, DISK_SALT_SIZE);
     const blob = new Blob([out], {type:'application/octet-stream'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1157,15 +1265,19 @@
   async function onDiskDecrypt(){
     const infoEl = document.getElementById('disk-decrypt-info');
     if(!diskTables){ infoEl.textContent = 'Tables de permutation en cours d\'initialisation, réessaie dans un instant.'; return; }
-    if(!diskMasterKey){ infoEl.textContent = 'Dérive la clé avant de déchiffrer.'; return; }
+    const pass = document.getElementById('disk-passphrase').value;
+    if(!pass){ infoEl.textContent = 'Entre une passphrase.'; return; }
     const input = document.getElementById('disk-file-decrypt');
     if(!input.files[0]){ infoEl.textContent = 'Choisis un fichier .lldh.'; return; }
     const file = input.files[0];
     const buf = new Uint8Array(await file.arrayBuffer());
+    if(buf.length < DISK_SALT_SIZE){ infoEl.textContent = 'Fichier trop court.'; return; }
     diskSetProgress('disk-decrypt-progress-bar','disk-decrypt-progress',0);
     let out;
     try{
-      out = await diskDecryptFile(buf, diskMasterKey, diskTables, pct=>diskSetProgress('disk-decrypt-progress-bar','disk-decrypt-progress',pct));
+      const salt = buf.slice(0, DISK_SALT_SIZE);
+      const masterKey = await diskPassphraseToKey(pass, salt);
+      out = await diskDecrypt(buf.slice(DISK_SALT_SIZE), masterKey, diskTables, pct=>diskSetProgress('disk-decrypt-progress-bar','disk-decrypt-progress',pct));
     }catch(e){
       infoEl.textContent = 'Erreur de déchiffrement : ' + e.message;
       return;
@@ -1190,7 +1302,6 @@
     document.getElementById('dec-file-grid').addEventListener('change', function(){ loadGridFile(this); });
     document.getElementById('dec-file-keys').addEventListener('change', function(){ loadKeysFile(this); });
 
-    document.getElementById('btnDeriveKey').addEventListener('click', onDeriveKey);
     document.getElementById('btnDiskEncrypt').addEventListener('click', onDiskEncrypt);
     document.getElementById('btnDiskDecrypt').addEventListener('click', onDiskDecrypt);
     document.getElementById('disk-file-encrypt').addEventListener('change', function(){
