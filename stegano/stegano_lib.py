@@ -156,6 +156,37 @@ def _decrypt(vals: List[int], steg_key: bytes) -> str:
         raise ValueError("Tag Poly1305 invalide — clé incorrecte ou données altérées")
     return pt.decode('ascii', errors='replace')
 
+# ── Flux de symboles — API pour carter.py et grid_90.py ──────────────────────
+# Ces modules construisent leur propre flux et appellent _decrypt() dessus.
+# Ils doivent donc produire exactement le même flux que encode() : en-tête de
+# longueur puis payload, en symboles base-44. Sans cela, ils continueraient
+# d'écrire des nibbles [0..15] repérables dans un bruit couvrant [0..43].
+
+def payload_to_symbols(payload: bytes) -> List[int]:
+    """Payload chiffré → flux de symboles uniformes sur [0..ALPHA_LEN-1]."""
+    return (_bytes_to_syms(struct.pack('>I', len(payload)), _SYM_HEADER)
+            + _bytes_to_syms(payload, _sym_count(len(payload))))
+
+def symbols_needed(payload_len: int) -> int:
+    """Nombre de positions nécessaires pour un payload de cette taille."""
+    return _SYM_HEADER + _sym_count(payload_len)
+
+def max_payload_for(n_positions: int) -> int:
+    """Plus grand payload (en octets) tenant dans n_positions symboles."""
+    avail = n_positions - _SYM_HEADER
+    if avail <= 0:
+        return 0
+    lo, hi = 0, avail
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _sym_count(mid) <= avail: lo = mid
+        else: hi = mid - 1
+    return lo
+
+def max_message_for(n_positions: int) -> int:
+    """Plus long message clair tenant dans n_positions symboles."""
+    return max(0, max_payload_for(n_positions) - _AEAD_OVERHEAD)
+
 # ── Orientations D4 ──────────────────────────────────────────────────────────
 ORIENTATIONS = [
     lambda r,c,n: (r,   c  ),
@@ -221,8 +252,7 @@ def encode(message: str, steg_key: bytes,
 
     payload = _encrypt(message, steg_key)
     # En-tête (longueur) + payload, en symboles base-44 uniformes
-    nibbles = (_bytes_to_syms(struct.pack('>I', len(payload)), _SYM_HEADER)
-               + _bytes_to_syms(payload, _sym_count(len(payload))))
+    nibbles = payload_to_symbols(payload)
 
     # Grille de bruit — même loi uniforme [0..ALPHA_LEN-1] que les symboles
     grid = [[secrets.randbelow(ALPHA_LEN) for _ in range(N)] for _ in range(N)]
