@@ -116,6 +116,9 @@
   .license-box p:last-child{ margin-bottom:0; opacity:.75; font-size:11px; }
   .license-box a{ color:var(--gold); text-decoration:none; }
   .license-box a:hover{ text-decoration:underline; }
+  .license-footer{ text-align:center; font-size:11px; color:var(--dim); opacity:.75; line-height:1.8; margin-top:24px; padding-top:18px; border-top:1px solid var(--line); }
+  .license-footer a{ color:var(--gold); text-decoration:none; }
+  .license-footer a:hover{ text-decoration:underline; }
   .iacr-mention{ max-width:64ch; margin:30px auto 0; text-align:center; font-size:11px; color:var(--dim); opacity:.8; line-height:1.7; border-top:1px solid var(--line); padding-top:18px; }
   .iacr-mention a{ color:var(--gold); text-decoration:none; }
   .iacr-mention a:hover{ text-decoration:underline; }
@@ -176,11 +179,13 @@
       <div id="encApp" hidden>
         <nav class="enc-nav">
           <button type="button" class="active" data-tab="demo">⚡ Démo</button>
-          <button type="button" data-tab="encoder">🔒 Encoder</button>
-          <button type="button" data-tab="decoder">🔓 Décoder</button>
+          <button type="button" data-tab="exchange">🔑 Exchange</button>
+          <button type="button" data-tab="encoder">📨 Message</button>
+          <button type="button" data-tab="decoder">🔓 Déchiffrer</button>
+          <button type="button" data-tab="vault">💾 Vault</button>
+          <button type="button" data-tab="disk">🔒 Chiffrement</button>
           <button type="button" data-tab="referents">📐 Référents</button>
           <button type="button" data-tab="about">📖 À propos</button>
-          <button type="button" data-tab="disk">💾 Chiffrement</button>
         </nav>
 
         <!-- DÉMO -->
@@ -197,10 +202,58 @@
           </div>
         </div>
 
+        <!-- EXCHANGE -->
+        <div id="tab-exchange" class="enc-tab">
+          <div class="enc-card">
+            <h2>Échange de clés — X25519 éphémère</h2>
+            <p class="ref-note">Permet à deux correspondants de dériver la même session sans jamais transmettre de secret : chacun génère une paire de clés éphémère X25519, échange sa clé publique, et dérive localement la même clé de session par ECDH + HKDF-SHA256. La clé privée éphémère est détruite après dérivation (forward secrecy).</p>
+            <div class="enc-info-box">
+              <b>Avertissement :</b> la clé éphémère est générée dans votre navigateur et n'est jamais transmise. La session ne survit pas à la fermeture de l'onglet ni à l'effacement des données du site (forward secrecy). Vérifiez le fingerprint avec votre correspondant par un canal séparé (appel vocal, QR code) avant d'échanger des messages sensibles.
+            </div>
+          </div>
+
+          <div class="enc-card">
+            <h2>Étape 1 — Votre clé éphémère</h2>
+            <button type="button" class="enc-btn" id="btnScGenerate">Générer ma clé éphémère</button>
+            <div id="sc-my-key" hidden style="margin-top:12px">
+              <label class="enc-label">Ma clé publique (à envoyer à votre correspondant)</label>
+              <textarea class="enc-textarea" id="sc-my-pub" readonly style="min-height:50px"></textarea>
+              <button type="button" class="enc-btn secondary" id="btnScCopyPub">Copier</button>
+            </div>
+          </div>
+
+          <div class="enc-card">
+            <h2>Étape 2 — Clé de votre correspondant</h2>
+            <label class="enc-label">Clé publique reçue (64 caractères hex)</label>
+            <input type="text" class="enc-input" id="sc-their-pub" placeholder="Coller la clé publique du correspondant">
+            <button type="button" class="enc-btn" id="btnScDerive">Dériver la session</button>
+            <div id="sc-session-result" hidden style="margin-top:14px">
+              <div class="enc-result-box" id="sc-session-info"></div>
+              <p class="ref-note" style="margin-top:8px">Les clés de session sont stockées dans votre navigateur (localStorage). Effacer l'historique ou utiliser la navigation privée les supprime. Aucune donnée n'est envoyée au serveur.</p>
+            </div>
+          </div>
+
+          <div class="enc-card">
+            <h2>Session active</h2>
+            <div id="sc-active-session" class="enc-info-box">Aucune session active. Dérivez une session ci-dessus, ou utilisez les onglets Message/Déchiffrer avec des clés générées librement.</div>
+            <button type="button" class="enc-btn secondary" id="btnScClearSession" hidden>Effacer la session</button>
+          </div>
+        </div>
+
         <!-- ENCODER -->
         <div id="tab-encoder" class="enc-tab">
           <div class="enc-card">
-            <h2>Encoder un message</h2>
+            <h2>Envoyer avec la session active</h2>
+            <div id="enc-session-status" class="enc-info-box">Aucune session active (onglet Exchange) — encode ci-dessous avec des clés générées librement.</div>
+            <label class="enc-label">Message à envoyer</label>
+            <input type="text" class="enc-input" id="enc-session-message" placeholder="VOTRE MESSAGE ICI" maxlength="200">
+            <button type="button" class="enc-btn" id="btnEncodeSession">Encoder et télécharger la grille</button>
+            <div id="enc-session-result" hidden>
+              <div class="enc-info-box" id="enc-session-info"></div>
+            </div>
+          </div>
+          <div class="enc-card">
+            <h2>Encoder un message (clés libres)</h2>
             <label class="enc-label">Message à encoder</label>
             <input type="text" class="enc-input" id="enc-message" placeholder="VOTRE MESSAGE ICI" maxlength="200">
             <div class="enc-row">
@@ -246,7 +299,18 @@
         <!-- DECODER -->
         <div id="tab-decoder" class="enc-tab">
           <div class="enc-card">
-            <h2>Décoder un message</h2>
+            <h2>Déchiffrer avec la session active</h2>
+            <div id="dec-session-status" class="enc-info-box">Aucune session active (onglet Exchange).</div>
+            <label class="enc-label">Grille CSV (coller ou charger)</label>
+            <textarea class="enc-textarea" id="dec-session-grid" placeholder="1,23,5,14,2,..."></textarea>
+            <input type="file" class="enc-input" id="dec-session-file-grid" accept=".csv">
+            <button type="button" class="enc-btn" id="btnDecodeSession">Déchiffrer</button>
+            <div id="dec-session-result" hidden>
+              <div class="enc-result-box" id="dec-session-msg"></div>
+            </div>
+          </div>
+          <div class="enc-card">
+            <h2>Décoder avec des clés manuelles</h2>
             <label class="enc-label">Grille CSV (coller ou charger)</label>
             <textarea class="enc-textarea" id="dec-grid" placeholder="1,23,5,14,2,..."></textarea>
             <label class="enc-label">Les clés (JSON — {stegKeyHex, keyB, keyC, key2, gridSize})</label>
@@ -262,6 +326,40 @@
             <input type="file" class="enc-input" id="dec-file-grid" accept=".csv">
             <label class="enc-label">Fichier des clés (JSON)</label>
             <input type="file" class="enc-input" id="dec-file-keys" accept=".json">
+          </div>
+        </div>
+
+        <!-- VAULT -->
+        <div id="tab-vault" class="enc-tab">
+          <div class="enc-card">
+            <h2>Vault chiffré — fichiers</h2>
+            <p class="ref-note">Chiffre vos fichiers dans le navigateur (AES-256-GCM par entrée, manifest chiffré, HMAC-SHA256 global — format inspiré de <code>vault_lib.py</code>). Aucun fichier ni passphrase n'est transmis au serveur.</p>
+            <div class="enc-info-box"><b>Avertissement :</b> vos fichiers sont chiffrés localement. Conservez votre passphrase — sans elle, les fichiers sont irrécupérables.</div>
+            <label class="enc-label">Passphrase du vault</label>
+            <input type="password" class="enc-input" id="vault-passphrase" placeholder="Passphrase du vault" autocomplete="off">
+            <div class="enc-row">
+              <button type="button" class="enc-btn" id="btnVaultNew">Créer un nouveau vault</button>
+              <button type="button" class="enc-btn secondary" id="btnVaultOpenPrompt">Ouvrir un fichier .sbvault</button>
+            </div>
+            <input type="file" class="enc-input" id="vault-file-open" accept=".sbvault" hidden>
+            <div id="vault-status" class="enc-info-box" style="margin-top:12px">Aucun vault ouvert.</div>
+          </div>
+
+          <div id="vault-app" hidden>
+            <div class="enc-card">
+              <h2>Ajouter un fichier</h2>
+              <input type="file" class="enc-input" id="vault-file-add">
+              <button type="button" class="enc-btn" id="btnVaultAdd">Chiffrer et ajouter</button>
+              <div class="disk-file-info" id="vault-add-info"></div>
+            </div>
+            <div class="enc-card">
+              <h2>Contenu du vault</h2>
+              <div id="vault-list"></div>
+            </div>
+            <div class="enc-card">
+              <h2>Exporter</h2>
+              <button type="button" class="enc-btn" id="btnVaultExport">⬇ Télécharger vault.sbvault</button>
+            </div>
           </div>
         </div>
 
@@ -298,6 +396,27 @@
               <b>Brevet antécédent :</b> <a href="https://patents.google.com/patent/FR2865054A1/fr" target="_blank" rel="noopener">FR2865054</a> (2004) — composition automatisée d'un motif symbolique à partir d'une relation mathématique.<br><br>
               <b>Contact :</b> anibaledel@gmail.com · <a href="https://anibal-amiot.com" target="_blank" rel="noopener">anibal-amiot.com</a> · Wikidata <a href="https://www.wikidata.org/wiki/Q141191562" target="_blank" rel="noopener">Q141191562</a>
             </div>
+          </div>
+
+          <div class="enc-card enc-about">
+            <h2>Architecture SecuBox</h2>
+            <p>SecuBox assemble cinq composants indépendants, chacun documenté et vérifié séparément dans ses propres onglets :</p>
+            <div class="enc-info-box">
+              <b>1. Exchange (X25519)</b> — échange de clés éphémère par courbe elliptique Curve25519 (natif dans l'API Web Crypto de ce navigateur), HKDF-SHA256 avec information canonique (min(clé A, clé B) ‖ max(clé A, clé B)) pour dériver la même session des deux côtés sans jamais transmettre de secret. Forward secrecy : la clé privée éphémère est détruite après dérivation.<br><br>
+              <b>2. Message / Déchiffrer</b> — stéganographie géométrique (voir ci-dessus), utilisant les clés dérivées par la session Exchange active.<br><br>
+              <b>3. Vault</b> — chiffrement de fichiers en local, AES-256-GCM par entrée, manifest chiffré, HMAC-SHA256 global (architecture inspirée de <code>vault_lib.py</code>).<br><br>
+              <b>4. Chiffrement fichier</b> — SPN géométrique (Ref256+Ref360) en couche de diversification de clé, AES-256-GCM en couche de chiffrement authentifié (voir l'onglet Chiffrement).<br><br>
+              <b>5. Référents 256 et 360</b> — les tables de formes géométriques (croix ansée, Jacquard) qui alimentent les quatre composants ci-dessus.<br><br>
+              <b>Note sur les substitutions de chiffrement :</b> la référence Python (<code>secu_box.py</code>, <code>vault_lib.py</code>, <code>disk_lib.py</code>) utilise XChaCha20-Poly1305, absent de l'API Web Crypto des navigateurs. AES-256-GCM lui est substitué dans cette page — même classe de garantie (AEAD, 256 bits, standard audité) via l'implémentation native du navigateur plutôt qu'une implémentation ChaCha20 maison. X25519 est en revanche implémenté nativement et identiquement des deux côtés.<br><br>
+              <b>Avertissement général :</b> SecuBox est un système expérimental basé sur des constructions géométriques originales. La couche cryptographique (AES-256-GCM, X25519, HKDF, PBKDF2) est standard et auditée. La couche géométrique (La Livrée d'Hermès) est en cours d'évaluation formelle — voir l'audit cryptologique externe du 2026-09-10 mentionné dans les onglets Chiffrement et Déchiffrer.
+            </div>
+          </div>
+
+          <div class="license-footer">
+            SecuBox — Code source : <a href="https://github.com/anibaledel/livreedhermes" target="_blank" rel="noopener">AGPL v3 (usage non-commercial)</a> ·
+            Usage commercial : <a href="mailto:anibaledel@gmail.com">anibaledel@gmail.com</a> ·
+            Algorithme : <a href="https://eprint.iacr.org" target="_blank" rel="noopener">IACR ePrint 2026</a> (CC BY) ·
+            Brevet FR2865054 · Wikidata <a href="https://www.wikidata.org/wiki/Q141191562" target="_blank" rel="noopener">Q141191562</a>
           </div>
         </div>
 
@@ -781,6 +900,451 @@
     const fr=new FileReader();
     fr.onload=e=>{ document.getElementById('dec-keys').value=e.target.result; };
     fr.readAsText(input.files[0]);
+  }
+
+  // ============================================================
+  // Exchange — échange de clés X25519 éphémère (secu_box.py porté en JS)
+  // ECDH éphémère + HKDF-SHA256 (info canonique) → clé stéganographique +
+  // graine géométrique ; les clés B/C/2 sont dérivées de la graine par un
+  // PRNG HMAC-SHA256 déterministe, dans le MÊME ORDRE que Python (tout
+  // Clé C d'abord pour tous les blocs, puis toute Clé 2) — un écart d'ordre
+  // romprait l'interopérabilité entre ce site et la CLI Python, seul point
+  // de cette page où les deux côtés doivent réellement s'accorder bit à bit.
+  // X25519 est nativement supporté par l'API Web Crypto de ce navigateur
+  // (vérifié) — pas de substitution nécessaire, contrairement à AES-256-GCM
+  // pour XChaCha20-Poly1305 ailleurs sur cette page.
+  // ============================================================
+  let scEphemeralKeyPair = null, scMyPubHex = null, scSession = null;
+
+  function scBytesToHex(bytes){ return Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+  function scHexToBytes(hex){ const a = new Uint8Array(hex.length/2); for(let i=0;i<a.length;i++) a[i]=parseInt(hex.substr(i*2,2),16); return a; }
+  function scCompareBytes(a,b){ for(let i=0;i<a.length;i++){ if(a[i]!==b[i]) return a[i]-b[i]; } return 0; }
+
+  async function scGenerateEphemeralKeyPair(){
+    const kp = await crypto.subtle.generateKey({name:'X25519'}, true, ['deriveBits']);
+    const pubRaw = await crypto.subtle.exportKey('raw', kp.publicKey);
+    return { keyPair: kp, publicHex: scBytesToHex(new Uint8Array(pubRaw)) };
+  }
+
+  // PRNG HMAC-SHA256 déterministe (compatible secu_box.py::_km_to_keys) :
+  // seed + compteur(uint64 BE) -> SHA256 -> 8 premiers octets en uint64 BE % n.
+  function scMakePrng(seed){
+    let counter = 0;
+    return async function(n){
+      const ctrBuf = new Uint8Array(8);
+      new DataView(ctrBuf.buffer).setBigUint64(0, BigInt(counter), false);
+      counter++;
+      const data = new Uint8Array(seed.length+8);
+      data.set(seed,0); data.set(ctrBuf, seed.length);
+      const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+      const val = new DataView(hash.buffer).getBigUint64(0, false);
+      return Number(val % BigInt(n));
+    };
+  }
+
+  async function scDeriveGeoKeys(seed, ref256Len, gridSize=60, blockSize=1){
+    const B = gridSize/6, nBlocks = B*B;
+    const prng = scMakePrng(seed);
+    const keyB = Array(nBlocks).fill(blockSize);
+    // Tous les blocs de Clé C d'abord, puis tous les blocs de Clé 2 —
+    // ordre exact de Python (deux compréhensions de liste séparées).
+    const keyC = [];
+    for(let i=0;i<nBlocks;i++){
+      const sub = [];
+      for(let j=0;j<blockSize*blockSize;j++) sub.push(await prng(8));
+      keyC.push(sub);
+    }
+    const key2 = [];
+    for(let i=0;i<nBlocks;i++){
+      const form_id = await prng(ref256Len);
+      const color = (await prng(2))===0 ? 'blue' : 'orange';
+      key2.push({form_id, color});
+    }
+    return {keyB, keyC, key2};
+  }
+
+  async function scDeriveSession(myKeyPair, myPubHex, theirPubHex, ref256, gridSize=60, blockSize=1){
+    const theirPubRaw = scHexToBytes(theirPubHex);
+    const theirPub = await crypto.subtle.importKey('raw', theirPubRaw, {name:'X25519'}, false, []);
+    const sharedBits = await crypto.subtle.deriveBits({name:'X25519', public: theirPub}, myKeyPair.privateKey, 256);
+    const shared = new Uint8Array(sharedBits);
+
+    const myPubRaw = scHexToBytes(myPubHex);
+    const [lo, hi] = scCompareBytes(myPubRaw, theirPubRaw) < 0 ? [myPubRaw, theirPubRaw] : [theirPubRaw, myPubRaw];
+    const info = new Uint8Array(lo.length+hi.length);
+    info.set(lo,0); info.set(hi,lo.length);
+
+    const hkdfKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
+    const kmBits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt: new TextEncoder().encode('SecuBox-Session-v1'), info}, hkdfKey, 512);
+    const km = new Uint8Array(kmBits);
+    const stegKey = km.slice(0,32);
+    const geoSeed = km.slice(32,64);
+
+    const sidBuf = new Uint8Array(await crypto.subtle.digest('SHA-256', shared));
+    const sessionId = scBytesToHex(sidBuf.slice(0,8));
+
+    const geoKeys = await scDeriveGeoKeys(geoSeed, ref256.length, gridSize, blockSize);
+    return { stegKeyHex: scBytesToHex(stegKey), keyB: geoKeys.keyB, keyC: geoKeys.keyC, key2: geoKeys.key2, sessionId, gridSize };
+  }
+
+  async function scFingerprint(sessionId){
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionId)));
+    return Array.from(h.slice(0,6)).map(b=>b.toString(16).padStart(2,'0')).join(':');
+  }
+
+  const SC_SESSION_KEY = 'secubox_session_v1';
+
+  function scSaveSession(session){
+    localStorage.setItem(SC_SESSION_KEY, JSON.stringify(session));
+    scSession = session;
+  }
+  function scLoadSession(){
+    try{
+      const raw = localStorage.getItem(SC_SESSION_KEY);
+      scSession = raw ? JSON.parse(raw) : null;
+    }catch(e){ scSession = null; }
+    return scSession;
+  }
+  function scClearSession(){
+    localStorage.removeItem(SC_SESSION_KEY);
+    scSession = null;
+  }
+
+  function scRefreshActiveSessionUI(){
+    const el = document.getElementById('sc-active-session');
+    const clearBtn = document.getElementById('btnScClearSession');
+    if(!el) return;
+    if(scSession){
+      el.innerHTML = `Session active : <b>${scSession.sessionId}</b> (grille ${scSession.gridSize}×${scSession.gridSize})`;
+      clearBtn.hidden = false;
+    }else{
+      el.textContent = 'Aucune session active. Dérivez une session ci-dessus, ou utilisez les onglets Message/Déchiffrer avec des clés générées librement.';
+      clearBtn.hidden = true;
+    }
+    const decStatus = document.getElementById('dec-session-status');
+    if(decStatus){
+      decStatus.textContent = scSession
+        ? `Session active : ${scSession.sessionId}`
+        : 'Aucune session active (onglet Exchange).';
+    }
+    const encStatus = document.getElementById('enc-session-status');
+    if(encStatus){
+      encStatus.textContent = scSession
+        ? `Session active : ${scSession.sessionId} (grille ${scSession.gridSize}×${scSession.gridSize})`
+        : 'Aucune session active (onglet Exchange) — encode ci-dessous avec des clés générées librement.';
+    }
+  }
+
+  async function onEncodeSession(){
+    const infoEl = document.getElementById('enc-session-info');
+    const resultBox = document.getElementById('enc-session-result');
+    if(!REF256) return;
+    if(!scSession){ resultBox.hidden=false; infoEl.textContent = 'Dérive une session d\'abord (onglet Exchange).'; return; }
+    const msg = document.getElementById('enc-session-message').value.trim().toUpperCase();
+    if(!msg){ resultBox.hidden=false; infoEl.textContent = 'Entre un message.'; return; }
+    try{
+      const stegKey = stegHexToBytes(scSession.stegKeyHex);
+      const grid = await stegEncode(msg, stegKey, scSession.keyB, scSession.keyC, scSession.key2, REF256, scSession.gridSize);
+      const blob = new Blob([gridToCsv(grid)], {type:'text/csv'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `grille_${scSession.sessionId.slice(0,8)}.csv`;
+      a.click();
+      resultBox.hidden = false;
+      infoEl.innerHTML = `« ${msg} » encodé et téléchargé — grille_${scSession.sessionId.slice(0,8)}.csv`;
+    }catch(e){
+      resultBox.hidden = false;
+      infoEl.textContent = 'Erreur : ' + e.message;
+    }
+  }
+
+  async function onScGenerate(){
+    const kp = await scGenerateEphemeralKeyPair();
+    scEphemeralKeyPair = kp.keyPair;
+    scMyPubHex = kp.publicHex;
+    document.getElementById('sc-my-key').hidden = false;
+    document.getElementById('sc-my-pub').value = scMyPubHex;
+  }
+
+  async function onScCopyPub(){
+    if(!scMyPubHex) return;
+    try{ await navigator.clipboard.writeText(scMyPubHex); }catch(e){}
+  }
+
+  async function onScDerive(){
+    const resultEl = document.getElementById('sc-session-info');
+    const resultBox = document.getElementById('sc-session-result');
+    if(!REF256) return;
+    if(!scEphemeralKeyPair){ resultBox.hidden=false; resultEl.textContent = 'Génère ta clé éphémère (étape 1) avant de dériver.'; return; }
+    const theirPubHex = document.getElementById('sc-their-pub').value.trim().toLowerCase();
+    if(!/^[0-9a-f]{64}$/.test(theirPubHex)){ resultBox.hidden=false; resultEl.textContent = 'Clé publique invalide (64 caractères hex attendus).'; return; }
+    try{
+      const session = await scDeriveSession(scEphemeralKeyPair, scMyPubHex, theirPubHex, REF256, 60, 1);
+      scSaveSession(session);
+      const fp = await scFingerprint(session.sessionId);
+      resultBox.hidden = false;
+      resultEl.innerHTML = `Session dérivée ✓<br>Session ID : <b>${session.sessionId}</b><br>Fingerprint : <b>${fp}</b><br>Forward secrecy : clé éphémère détruite ✓`;
+      scEphemeralKeyPair = null; scMyPubHex = null;
+      document.getElementById('sc-my-key').hidden = true;
+      scRefreshActiveSessionUI();
+    }catch(e){
+      resultBox.hidden = false;
+      resultEl.textContent = 'Erreur : ' + e.message;
+    }
+  }
+
+  function onScClearSession(){
+    scClearSession();
+    scRefreshActiveSessionUI();
+  }
+
+  async function onDecodeSession(){
+    const statusEl = document.getElementById('dec-session-status');
+    const resultEl = document.getElementById('dec-session-msg');
+    const resultBox = document.getElementById('dec-session-result');
+    if(!REF256) return;
+    if(!scSession){ statusEl.textContent = 'Aucune session active (onglet Exchange).'; return; }
+    const csvStr = document.getElementById('dec-session-grid').value.trim();
+    if(!csvStr){ resultBox.hidden=false; resultEl.textContent = 'Colle ou charge une grille CSV.'; return; }
+    try{
+      const grid = csvStr.split('\n').map(r=>r.split(',').map(Number));
+      const stegKey = stegHexToBytes(scSession.stegKeyHex);
+      const msg = await stegDecode(grid, stegKey, scSession.keyB, scSession.keyC, scSession.key2, REF256, scSession.gridSize);
+      resultBox.hidden = false;
+      resultEl.innerHTML = `Message décodé : <span class="enc-msg">${msg}</span>`;
+    }catch(e){
+      resultBox.hidden = false;
+      resultEl.textContent = 'Clé incorrecte ou grille corrompue : ' + e.message;
+    }
+  }
+
+  // ============================================================
+  // Vault — coffre de fichiers chiffrés (vault_lib.py porté en JS)
+  // Format .sbvault : [32B salt][4B taille manifest][manifest chiffré]
+  // [entrées chiffrées, chacune [4B taille][données]][32B HMAC-SHA256 global]
+  // Clé maître : PBKDF2-SHA256(passphrase, 'SecuBox-Vault-KDF-v1', 300000,
+  // 32) — sel fixe applicatif (pas aléatoire) : c'est le même mécanisme que
+  // secu_box_cli.py::_vault_key(), qui permet de rouvrir le même vault avec
+  // la seule passphrase, sans avoir à conserver un sel séparé. Chaque entrée
+  // et le manifest ont leur propre clé dérivée par HKDF-SHA256 depuis le sel
+  // interne du vault (aléatoire, embarqué dans le fichier .sbvault).
+  // AES-256-GCM substitué à XChaCha20-Poly1305 (voir note en tête de page).
+  // ============================================================
+  async function vaultDeriveMasterKey(passphrase){
+    const keyMat = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), {name:'PBKDF2'}, false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt: new TextEncoder().encode('SecuBox-Vault-KDF-v1'), iterations:300000, hash:'SHA-256'}, keyMat, 256);
+    return new Uint8Array(bits);
+  }
+  async function vaultDeriveSubKey(masterKey, salt, infoStr){
+    const keyMaterial = await crypto.subtle.importKey('raw', masterKey, 'HKDF', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', salt, info: new TextEncoder().encode(infoStr)}, keyMaterial, 256);
+    return new Uint8Array(bits);
+  }
+  function vaultEntryKey(masterKey, entryName, salt){ return vaultDeriveSubKey(masterKey, salt, `SecuBox-Vault-Entry:${entryName}`); }
+  function vaultManifestKey(masterKey, salt){ return vaultDeriveSubKey(masterKey, salt, 'SecuBox-Vault-Manifest'); }
+
+  async function vaultEnc(data, keyBytes, aad){
+    const key = await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, false, ['encrypt']);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const ctBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv:nonce, additionalData:aad, tagLength:128}, key, data);
+    const out = new Uint8Array(12+ctBuf.byteLength);
+    out.set(nonce,0); out.set(new Uint8Array(ctBuf),12);
+    return out;
+  }
+  async function vaultDec(data, keyBytes, aad){
+    const nonce = data.slice(0,12);
+    const ct = data.slice(12);
+    const key = await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, false, ['decrypt']);
+    const ptBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv:nonce, additionalData:aad, tagLength:128}, key, ct);
+    return new Uint8Array(ptBuf);
+  }
+  async function vaultHmac(key, data){
+    const k = await crypto.subtle.importKey('raw', key, {name:'HMAC', hash:'SHA-256'}, false, ['sign']);
+    return new Uint8Array(await crypto.subtle.sign('HMAC', k, data));
+  }
+  function vaultTimingSafeEqual(a,b){
+    if(a.length!==b.length) return false;
+    let d=0; for(let i=0;i<a.length;i++) d|=a[i]^b[i];
+    return d===0;
+  }
+  async function vaultSha256Hex(data){
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+    return Array.from(h).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+
+  class Vault{
+    constructor(masterKey, salt, entries){
+      this.masterKey = masterKey;
+      this.salt = salt;
+      this.entries = entries; // Map<name, {data:Uint8Array, sha256:hex, size:number}>
+    }
+    static create(masterKey){
+      return new Vault(masterKey, crypto.getRandomValues(new Uint8Array(32)), new Map());
+    }
+    static async open(bytes, masterKey){
+      if(bytes.length < 32+32) throw new Error('Fichier trop court pour être un vault.');
+      const macRecv = bytes.slice(bytes.length-32);
+      const payload = bytes.slice(0, bytes.length-32);
+      const macCalc = await vaultHmac(masterKey, payload);
+      if(!vaultTimingSafeEqual(macRecv, macCalc)) throw new Error('Vault corrompu ou passphrase incorrecte.');
+      const salt = payload.slice(0,32);
+      const rest = payload.slice(32);
+      const mkey = await vaultManifestKey(masterKey, salt);
+      const manifestSize = new DataView(rest.buffer, rest.byteOffset, 4).getUint32(0, false);
+      const manifestEnc = rest.slice(4, 4+manifestSize);
+      const manifestRaw = await vaultDec(manifestEnc, mkey, new TextEncoder().encode('manifest'));
+      const manifest = JSON.parse(new TextDecoder().decode(manifestRaw));
+      let cursor = 4+manifestSize;
+      const entries = new Map();
+      for(const name of Object.keys(manifest)){
+        const meta = manifest[name];
+        const entrySize = new DataView(rest.buffer, rest.byteOffset+cursor, 4).getUint32(0,false);
+        cursor += 4;
+        const entryEnc = rest.slice(cursor, cursor+entrySize);
+        cursor += entrySize;
+        const ekey = await vaultEntryKey(masterKey, name, salt);
+        const data = await vaultDec(entryEnc, ekey, new TextEncoder().encode(name));
+        const h = await vaultSha256Hex(data);
+        if(h !== meta.sha256) throw new Error(`Hash invalide pour '${name}'.`);
+        entries.set(name, {data, sha256:h, size:data.length});
+      }
+      return new Vault(masterKey, salt, entries);
+    }
+    async add(name, data){
+      const h = await vaultSha256Hex(data);
+      this.entries.set(name, {data, sha256:h, size:data.length});
+    }
+    get(name){
+      if(!this.entries.has(name)) throw new Error(`'${name}' absent du vault.`);
+      return this.entries.get(name).data;
+    }
+    remove(name){
+      if(!this.entries.has(name)) throw new Error(`'${name}' absent du vault.`);
+      this.entries.delete(name);
+    }
+    list(){
+      return Array.from(this.entries.entries()).map(([name,m])=>({name, size:m.size, sha256:m.sha256}));
+    }
+    async save(){
+      const mkey = await vaultManifestKey(this.masterKey, this.salt);
+      const manifest = {};
+      for(const [name,m] of this.entries) manifest[name] = {sha256:m.sha256, size:m.size};
+      const manifestRaw = new TextEncoder().encode(JSON.stringify(manifest));
+      const manifestEnc = await vaultEnc(manifestRaw, mkey, new TextEncoder().encode('manifest'));
+
+      const parts = [];
+      for(const [name,m] of this.entries){
+        const ekey = await vaultEntryKey(this.masterKey, name, this.salt);
+        const entryEnc = await vaultEnc(m.data, ekey, new TextEncoder().encode(name));
+        const sizeBuf = new Uint8Array(4);
+        new DataView(sizeBuf.buffer).setUint32(0, entryEnc.length, false);
+        parts.push(sizeBuf, entryEnc);
+      }
+      const entriesLen = parts.reduce((s,p)=>s+p.length,0);
+      const entriesBlob = new Uint8Array(entriesLen);
+      let off=0; for(const p of parts){ entriesBlob.set(p, off); off+=p.length; }
+
+      const manifestSizeBuf = new Uint8Array(4);
+      new DataView(manifestSizeBuf.buffer).setUint32(0, manifestEnc.length, false);
+
+      const payload = new Uint8Array(this.salt.length + 4 + manifestEnc.length + entriesBlob.length);
+      let p2 = 0;
+      payload.set(this.salt, p2); p2 += this.salt.length;
+      payload.set(manifestSizeBuf, p2); p2 += 4;
+      payload.set(manifestEnc, p2); p2 += manifestEnc.length;
+      payload.set(entriesBlob, p2);
+
+      const mac = await vaultHmac(this.masterKey, payload);
+      const out = new Uint8Array(payload.length+32);
+      out.set(payload,0); out.set(mac,payload.length);
+      return out;
+    }
+  }
+
+  let currentVault = null;
+
+  function vaultRenderList(){
+    const el = document.getElementById('vault-list');
+    const entries = currentVault ? currentVault.list() : [];
+    if(!entries.length){ el.innerHTML = '<p class="ref-note">Vault vide.</p>'; return; }
+    el.innerHTML = entries.map(e =>
+      `<div class="disk-file-info" style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+        <span>${e.name} — ${e.size.toLocaleString('fr-FR')} octets — sha256:${e.sha256.slice(0,12)}…</span>
+        <span>
+          <button type="button" class="enc-btn secondary" style="padding:6px 10px" data-vault-get="${e.name}">⬇</button>
+          <button type="button" class="enc-btn secondary" style="padding:6px 10px" data-vault-rm="${e.name}">✕</button>
+        </span>
+      </div>`
+    ).join('');
+    el.querySelectorAll('[data-vault-get]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const name = btn.getAttribute('data-vault-get');
+        const data = currentVault.get(name);
+        const blob = new Blob([data]);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = name; a.click();
+      });
+    });
+    el.querySelectorAll('[data-vault-rm]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        currentVault.remove(btn.getAttribute('data-vault-rm'));
+        vaultRenderList();
+      });
+    });
+  }
+
+  async function onVaultNew(){
+    const statusEl = document.getElementById('vault-status');
+    const pass = document.getElementById('vault-passphrase').value;
+    if(!pass){ statusEl.textContent = 'Entre une passphrase.'; return; }
+    const masterKey = await vaultDeriveMasterKey(pass);
+    currentVault = Vault.create(masterKey);
+    document.getElementById('vault-app').hidden = false;
+    statusEl.textContent = 'Nouveau vault créé (vide, en mémoire) — ajoute des fichiers puis exporte.';
+    vaultRenderList();
+  }
+
+  function onVaultOpenPrompt(){
+    document.getElementById('vault-file-open').click();
+  }
+
+  async function onVaultFileOpen(input){
+    const statusEl = document.getElementById('vault-status');
+    if(!input.files[0]) return;
+    const pass = document.getElementById('vault-passphrase').value;
+    if(!pass){ statusEl.textContent = 'Entre la passphrase du vault avant de l\'ouvrir.'; return; }
+    const bytes = new Uint8Array(await input.files[0].arrayBuffer());
+    try{
+      const masterKey = await vaultDeriveMasterKey(pass);
+      currentVault = await Vault.open(bytes, masterKey);
+      document.getElementById('vault-app').hidden = false;
+      statusEl.textContent = `Vault ouvert : ${input.files[0].name} (${currentVault.list().length} fichier(s)).`;
+      vaultRenderList();
+    }catch(e){
+      statusEl.textContent = 'Erreur : ' + e.message;
+    }
+  }
+
+  async function onVaultAdd(){
+    const infoEl = document.getElementById('vault-add-info');
+    const input = document.getElementById('vault-file-add');
+    if(!currentVault){ infoEl.textContent = 'Crée ou ouvre un vault d\'abord.'; return; }
+    if(!input.files[0]){ infoEl.textContent = 'Choisis un fichier.'; return; }
+    const file = input.files[0];
+    const data = new Uint8Array(await file.arrayBuffer());
+    await currentVault.add(file.name, data);
+    infoEl.textContent = `'${file.name}' ajouté (${data.length.toLocaleString('fr-FR')} octets) — exporte pour sauvegarder.`;
+    vaultRenderList();
+  }
+
+  async function onVaultExport(){
+    if(!currentVault) return;
+    const bytes = await currentVault.save();
+    const blob = new Blob([bytes], {type:'application/octet-stream'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'vault.sbvault';
+    a.click();
   }
 
   function renderReferents(){
@@ -1330,10 +1894,31 @@
       const f = this.files[0];
       document.getElementById('disk-decrypt-info').textContent = f ? (f.name + ' — ' + f.size.toLocaleString('fr-FR') + ' octets') : '';
     });
+
+    document.getElementById('btnScGenerate').addEventListener('click', onScGenerate);
+    document.getElementById('btnScCopyPub').addEventListener('click', onScCopyPub);
+    document.getElementById('btnScDerive').addEventListener('click', onScDerive);
+    document.getElementById('btnScClearSession').addEventListener('click', onScClearSession);
+    document.getElementById('btnEncodeSession').addEventListener('click', onEncodeSession);
+    document.getElementById('btnDecodeSession').addEventListener('click', onDecodeSession);
+    document.getElementById('dec-session-file-grid').addEventListener('change', function(){
+      if(!this.files[0]) return;
+      const fr = new FileReader();
+      fr.onload = e => { document.getElementById('dec-session-grid').value = e.target.result; };
+      fr.readAsText(this.files[0]);
+    });
+
+    document.getElementById('btnVaultNew').addEventListener('click', onVaultNew);
+    document.getElementById('btnVaultOpenPrompt').addEventListener('click', onVaultOpenPrompt);
+    document.getElementById('vault-file-open').addEventListener('change', function(){ onVaultFileOpen(this); });
+    document.getElementById('btnVaultAdd').addEventListener('click', onVaultAdd);
+    document.getElementById('btnVaultExport').addEventListener('click', onVaultExport);
   }
 
   document.addEventListener('DOMContentLoaded', function(){
     wireUI();
+    scLoadSession();
+    scRefreshActiveSessionUI();
     const proOnlyEl = document.getElementById('encProOnly');
     function tryInit(){
       if(!proOnlyEl.hidden && !REF256){ loadReferents(); }
