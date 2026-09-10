@@ -297,7 +297,7 @@
 
           <div class="enc-card">
             <h2>Grille Carter 90×90 (grammaire dérivée de la clé)</h2>
-            <p class="ref-note">Une seule passphrase dérive le rôle (pur / structuré / message), la forme et l'orientation de chacun des 225 blocs 6×6 — aucun placement n'est stocké en dehors de la clé. Les blocs « structurés » et « message » sont statistiquement indiscernables sans elle.</p>
+            <p class="ref-note">Une seule passphrase dérive le rôle (pur / structuré / message), la forme et l'orientation de chacun des 225 blocs 6×6 — aucun placement n'est stocké en dehors de la clé. Les blocs « structurés » et « message » sont statistiquement indiscernables sans elle. Chaque encodage tire un <b>sel</b> aléatoire, affiché après coup : le transmettre avec la passphrase. Il n'est pas secret et ne figure pas dans le CSV, mais sans lui la grille reste close — et c'est lui qui empêche qu'une table précalculée sur des passphrases courantes n'ouvre les grilles de tous les utilisateurs à la fois.</p>
             <label class="enc-label">Passphrase Carter</label>
             <input type="password" class="enc-input" id="carter-passphrase" placeholder="Passphrase Carter" autocomplete="off">
             <label class="enc-label">Message à encoder</label>
@@ -345,6 +345,8 @@
             <h2>Décoder une grille Carter 90×90</h2>
             <label class="enc-label">Passphrase Carter</label>
             <input type="password" class="enc-input" id="carter-dec-passphrase" placeholder="Passphrase Carter" autocomplete="off">
+            <label class="enc-label">Sel de la grille (32 caractères hex, transmis avec la passphrase)</label>
+            <input type="text" class="enc-input" id="carter-dec-salt" placeholder="laisser vide pour une grille produite avant septembre 2026" autocomplete="off">
             <label class="enc-label">Grille CSV (coller ou charger)</label>
             <textarea class="enc-textarea" id="carter-dec-grid" placeholder="1,23,5,14,2,..."></textarea>
             <input type="file" class="enc-input" id="carter-dec-file-grid" accept=".csv">
@@ -844,10 +846,49 @@
   const CARTER_GRID = 90, CARTER_BLOCK = 6, CARTER_SIDE = 15, CARTER_N = 225;
   const CARTER_PURE = 0, CARTER_STRUCTURED = 1, CARTER_MESSAGE = 2;
 
-  async function carterDeriveMasterKey(passphrase){
+  // CORRECTIF AUDIT 2026-09-10 — sel de la dérivation Carter.
+  //
+  // La clé maître dérivait de PBKDF2(passphrase, "SecuBox-Carter-KDF-v1"),
+  // un libellé applicatif identique pour tout le monde. Une seule table
+  // précalculée sur des passphrases candidates ouvrait donc TOUTES les
+  // grilles Carter de TOUS les utilisateurs — exactement le défaut corrigé
+  // pour le Vault, dont la v2 utilise le sel aléatoire de son en-tête.
+  //
+  // Carter n'a pas d'en-tête où loger un sel : la grille doit rester du
+  // bruit uniforme, et un sel lisible sans la clé y serait une structure
+  // visible, ce qui ruinerait la dissimulation. Mais le sel n'a pas besoin
+  // d'être DANS la grille — il n'est pas secret, et il peut voyager avec la
+  // passphrase, qui circule déjà hors bande. Il n'est donc volontairement
+  // pas écrit dans le CSV : un « #salt= » en tête de fichier annoncerait un
+  // contenu chiffré, alors que le transmettre avec la passphrase ne coûte
+  // aucun canal supplémentaire.
+  //
+  // Le sel est tiré au hasard à chaque encodage. La précomputation globale
+  // disparaît : casser une grille redemande 300 000 itérations par
+  // passphrase candidate ET par grille.
+  const CARTER_SALT_BYTES = 16;
+  const CARTER_LEGACY_SALT = 'SecuBox-Carter-KDF-v1';
+
+  async function carterDeriveMasterKey(passphrase, salt){
+    // salt absent → grille produite avant ce correctif : on retombe sur le
+    // libellé constant pour rester capable de les relire.
+    const saltBytes = salt && salt.length
+      ? salt
+      : new TextEncoder().encode(CARTER_LEGACY_SALT);
     const keyMat = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), {name:'PBKDF2'}, false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt: new TextEncoder().encode('SecuBox-Carter-KDF-v1'), iterations:300000, hash:'SHA-256'}, keyMat, 256);
+    const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt: saltBytes, iterations:300000, hash:'SHA-256'}, keyMat, 256);
     return new Uint8Array(bits);
+  }
+
+  function carterNewSalt(){ return crypto.getRandomValues(new Uint8Array(CARTER_SALT_BYTES)); }
+  function carterSaltToHex(b){ return Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join(''); }
+  function carterSaltFromHex(hex){
+    const h = hex.trim().toLowerCase().replace(/[^0-9a-f]/g,'');
+    if(!h) return null;
+    if(h.length !== CARTER_SALT_BYTES*2) throw new Error(`Sel invalide : ${CARTER_SALT_BYTES*2} caractères hexadécimaux attendus.`);
+    const a = new Uint8Array(CARTER_SALT_BYTES);
+    for(let i=0;i<a.length;i++) a[i] = parseInt(h.substr(i*2,2),16);
+    return a;
   }
 
   // Sépare la clé maître en deux sous-clés indépendantes (HKDF) : la
@@ -1322,7 +1363,9 @@
     const msg = document.getElementById('carter-message').value.trim().toUpperCase();
     if(!msg){ resultBox.hidden=false; infoEl.textContent = 'Entre un message.'; return; }
     try{
-      const masterKey = await carterDeriveMasterKey(pass);
+      const salt = carterNewSalt();
+      const saltHex = carterSaltToHex(salt);
+      const masterKey = await carterDeriveMasterKey(pass, salt);
       const grid = await encodeCarter(msg, masterKey, REF256);
       const cap = await carterCapacity(masterKey, REF256);
       const blob = new Blob([gridToCsv(grid)], {type:'text/csv'});
@@ -1331,7 +1374,7 @@
       a.download = 'grille_carter.csv';
       a.click();
       resultBox.hidden = false;
-      infoEl.innerHTML = `« ${msg} » encodé et téléchargé — grille_carter.csv<br>Grammaire : ${cap.blocsMessage} blocs message, ${cap.blocsStructure} structurés, ${cap.blocsPurs} purs — ${cap.ambiguite}.`;
+      infoEl.innerHTML = `« ${msg} » encodé et téléchargé — grille_carter.csv<br>Grammaire : ${cap.blocsMessage} blocs message, ${cap.blocsStructure} structurés, ${cap.blocsPurs} purs — ${cap.ambiguite}.<br><br><b>Sel de cette grille :</b><br><b style="word-break:break-all">${saltHex}</b><br>Le transmettre au destinataire <b>avec la passphrase</b>, par le même canal hors bande. Il n'est pas secret et ne figure pas dans le CSV — l'y écrire signalerait un contenu chiffré. Sans lui, la grille est indéchiffrable ; il est propre à cette grille et change à chaque encodage.`;
     }catch(e){
       resultBox.hidden = false;
       infoEl.textContent = 'Erreur : ' + e.message;
@@ -1348,7 +1391,8 @@
     if(!csvStr){ resultBox.hidden=false; resultEl.textContent = 'Colle ou charge une grille CSV.'; return; }
     try{
       const grid = csvStr.split('\n').map(r=>r.split(',').map(Number));
-      const masterKey = await carterDeriveMasterKey(pass);
+      const salt = carterSaltFromHex(document.getElementById('carter-dec-salt').value);
+      const masterKey = await carterDeriveMasterKey(pass, salt);
       const msg = await decodeCarter(grid, masterKey, REF256);
       resultBox.hidden = false;
       resultEl.innerHTML = `Message décodé : <span class="enc-msg">${msg}</span>`;
