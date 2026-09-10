@@ -50,7 +50,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from stegano_lib import (
     load_referents, encode, decode, make_keys,
     ALPHA_LEN, zigzag_blocks, apply_orientation,
-    _encrypt, _decrypt, _byte_to_nibs,
+    _encrypt, _decrypt, payload_to_symbols,
 )
 
 # ── Identité long-terme ───────────────────────────────────────────────────────
@@ -179,10 +179,10 @@ def encode_deniable(
 
     def place(msg: str, sk, kb, kc, k2, start: int):
         payload = _encrypt(msg, sk)
-        nibbles = []
-        for b in payload:
-            hi, lo = _byte_to_nibs(b)
-            nibbles += [hi, lo]
+        # Même flux de symboles base-44 que stegano_lib.encode() : les
+        # nibbles [0..15] trahissaient les cellules message dans un bruit
+        # couvrant [0..43].
+        nibbles = payload_to_symbols(payload)
         ni = 0; blk = 0; pi = start
         while blk < len(kb) and ni < len(nibbles) and pi < len(order):
             br, bc = order[pi]
