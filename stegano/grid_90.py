@@ -21,8 +21,11 @@ Encodage par super-bloc :
   - Bruit         → cellules restantes
 
 Capacité :
-  Un super-bloc (9 blocs × 6 positions) = 54 nibbles = 27 bytes utiles
-  9 super-blocs centraux = 9×27 = 243 bytes bruts → ~185 bytes après overhead XChaCha20
+  Un super-bloc rend 9 blocs × 6 positions = 54 symboles base-44.
+  9 super-blocs centraux = 486 symboles, soit environ 230 caractères une
+  fois retirés l'en-tête de longueur et le surcoût AEAD. stream_capacity()
+  donne le chiffre exact pour un jeu de clés donné : make_keys() dimensionne
+  ses clés sur une grille pleine et annonce nettement plus.
 """
 
 import os, secrets
@@ -30,7 +33,7 @@ from typing import List, Tuple, Dict, Optional
 from stegano_lib import (
     load_referents, make_keys,
     apply_orientation, ALPHA_LEN,
-    _encrypt, _decrypt, payload_to_symbols
+    _encrypt, _decrypt, payload_to_symbols, max_message_for
 )
 
 GRID_SIZE   = 90
@@ -85,11 +88,22 @@ def _collect_positions(sr, sc, ref256, k2, kc):
             positions.append((r0+r, c0+c))
     return positions   # 9 blocs × 6 positions = 54 positions
 
+def super_capacity(sr, sc, ref256, k2, kc) -> int:
+    """Plus long message tenant dans le super-bloc (sr, sc), en caractères."""
+    return max_message_for(len(_collect_positions(sr, sc, ref256, k2, kc)))
+
 def encode_super(grid, message, sk, kb, kc, k2, sr, sc, ref256):
-    """Encode un message dans les 54 positions du super-bloc (sr, sc)."""
+    """Encode un message dans les positions du super-bloc (sr, sc)."""
     payload  = _encrypt(message, sk)
     nibbles  = payload_to_symbols(payload)
     positions = _collect_positions(sr, sc, ref256, k2, kc)
+    # Sans cette garde, le surplus était écarté en silence à l'encodage et
+    # l'échec ne surgissait qu'au décodage, chez le destinataire.
+    if len(nibbles) > len(positions):
+        raise ValueError(
+            f"Message trop long pour un super-bloc : {len(message)} "
+            f"caractères > {max_message_for(len(positions))} disponibles "
+            f"({len(positions)} positions).")
     for i, (gr, gc) in enumerate(positions):
         if i >= len(nibbles): break
         if 0 <= gr < GRID_SIZE and 0 <= gc < GRID_SIZE:
@@ -106,8 +120,8 @@ def decode_super(grid, sk, kc, k2, sr, sc, ref256):
 def make_grid_90(real_message, real_keys, lure_message, lure_keys, ref256):
     """
     Construit la grille 90×90.
-    Message réel  → stream sur les 9 super-blocs centraux (486 nibbles)
-    Message leurre→ stream sur les 12 super-blocs de bord (648 nibbles)
+    Message réel  → stream sur les 9 super-blocs centraux (486 symboles)
+    Message leurre→ stream sur les 12 super-blocs de bord (648 symboles)
     Coins         → marqueurs fixes
     Reste         → bruit aléatoire
     """
@@ -130,44 +144,56 @@ def make_grid_90(real_message, real_keys, lure_message, lure_keys, ref256):
 
     return grid
 
-def _encode_stream(grid, message, keys, supers, ref256):
-    """Encode un message en stream sur une liste de super-blocs."""
-    payload = _encrypt(message, keys['steg_key'])
-    nibbles = payload_to_symbols(payload)
-    nib_i = 0
+def _stream_positions(keys, supers, ref256) -> List[Tuple[int,int]]:
+    """
+    Positions de lecture d'un stream, dans l'ordre.
+
+    Une seule marche de la géométrie, partagée par l'encodage, le décodage
+    et le calcul de capacité : c'est ce qui garantit que la capacité
+    annoncée est exactement celle que l'encodeur sait écrire.
+    """
+    positions = []
     for i, (sr, sc) in enumerate(supers):
-        if nib_i >= len(nibbles): break
         for j, (br, bc) in enumerate(blocks_of_super(sr, sc)):
-            if nib_i >= len(nibbles): break
-            idx  = (i * SUPER_BL * SUPER_BL + j) % len(keys['key_2'])
-            fk   = keys['key_2'][idx]
+            idx    = (i * SUPER_BL * SUPER_BL + j) % len(keys['key_2'])
+            fk     = keys['key_2'][idx]
             orient = keys['key_c'][idx][0]
-            form = ref256[fk['form_id'] % len(ref256)]
-            base = form[fk.get('color','blue')]
-            t    = apply_orientation(base, orient)
+            form   = ref256[fk['form_id'] % len(ref256)]
+            base   = form[fk.get('color','blue')]
             r0, c0 = br*BLOCK_SIZE, bc*BLOCK_SIZE
-            for r, c in t:
-                if nib_i >= len(nibbles): break
+            for r, c in apply_orientation(base, orient):
                 gr, gc = r0+r, c0+c
                 if 0 <= gr < GRID_SIZE and 0 <= gc < GRID_SIZE:
-                    grid[gr][gc] = nibbles[nib_i]; nib_i += 1
+                    positions.append((gr, gc))
+    return positions
+
+def stream_capacity(keys, supers, ref256) -> int:
+    """Plus long message tenant dans ces super-blocs, en caractères."""
+    return max_message_for(len(_stream_positions(keys, supers, ref256)))
+
+def _encode_stream(grid, message, keys, supers, ref256):
+    """Encode un message en stream sur une liste de super-blocs."""
+    payload   = _encrypt(message, keys['steg_key'])
+    nibbles   = payload_to_symbols(payload)
+    positions = _stream_positions(keys, supers, ref256)
+    # make_keys() dimensionne ses clés sur la capacité d'une grille pleine,
+    # bien supérieure aux positions qu'un stream de super-blocs rend. Sans
+    # cette garde, le surplus était écarté en silence à l'encodage et
+    # l'échec ne surgissait qu'au décodage, chez le destinataire.
+    if len(nibbles) > len(positions):
+        raise ValueError(
+            f"Message trop long pour {len(supers)} super-blocs : "
+            f"{len(message)} caractères > "
+            f"{max_message_for(len(positions))} disponibles "
+            f"({len(positions)} positions).")
+    for nib_i, (gr, gc) in enumerate(positions):
+        if nib_i >= len(nibbles): break
+        grid[gr][gc] = nibbles[nib_i]
 
 def _decode_stream(grid, keys, supers, ref256):
     """Lit en stream depuis une liste de super-blocs."""
-    vals = []
-    for i, (sr, sc) in enumerate(supers):
-        for j, (br, bc) in enumerate(blocks_of_super(sr, sc)):
-            idx  = (i * SUPER_BL * SUPER_BL + j) % len(keys['key_2'])
-            fk   = keys['key_2'][idx]
-            orient = keys['key_c'][idx][0]
-            form = ref256[fk['form_id'] % len(ref256)]
-            base = form[fk.get('color','blue')]
-            t    = apply_orientation(base, orient)
-            r0, c0 = br*BLOCK_SIZE, bc*BLOCK_SIZE
-            for r, c in t:
-                gr, gc = r0+r, c0+c
-                if 0 <= gr < GRID_SIZE and 0 <= gc < GRID_SIZE:
-                    vals.append(grid[gr][gc])
+    vals = [grid[gr][gc]
+            for gr, gc in _stream_positions(keys, supers, ref256)]
     return _decrypt(vals, keys['steg_key'])
 
 def decode_grid_90(grid, keys, ref256, role='center'):
@@ -186,7 +212,7 @@ def detect_corners(grid) -> bool:
         if grid[r0][c0] != 15 or grid[r0][c0+1] != 15: return False
     return True
 
-def print_map():
+def print_map(keys=None, ref256=None):
     sym = {'corner':'▓','edge':'░','center':'·'}
     print("Structure 5×5 super-blocs (15×15 blocs de 6×6) :")
     print("  ┌───────────────────┐")
@@ -198,19 +224,26 @@ def print_map():
     print("  ▓ coin(4)    : marqueurs sans clé")
     print("  ░ bord(12)   : message leurre")
     print("  · centre(9)  : message réel\n")
-    print(f"  Capacité utile / super-bloc : 54 nibbles = 27 bytes")
-    overhead = 4 + 24 + 16   # header + nonce + tag
-    print(f"  Overhead XChaCha20 : {overhead} bytes")
-    print(f"  Message max / super-bloc : {27-overhead} bytes (3 chars)")
-    print(f"  → Pour messages longs : stream sur 9 super-blocs centraux")
-    print(f"  → Capacité totale message réel : 9×(27-{overhead}) = {9*(27-overhead)} bytes = {9*(27-overhead)} chars")
+    # Les capacités dépendent des clés (formes et orientations tirées), donc
+    # elles ne se calculent qu'avec un jeu de clés sous la main. L'ancien
+    # affichage les dérivait d'une arithmétique en nibbles périmée et
+    # annonçait des valeurs négatives : « -17 bytes (3 chars) ».
+    if keys is None or ref256 is None:
+        print("  Capacités : voir stream_capacity() — elles dépendent des clés.")
+        return
+    center = [(sr,sc) for sr in range(1,4) for sc in range(1,4)]
+    edge   = [(sr,sc) for sr in range(SUPER_SIDE) for sc in range(SUPER_SIDE)
+              if super_role(sr,sc)=='edge']
+    for label, supers in (("message réel (9 super-blocs centraux)", center),
+                          ("message leurre (12 super-blocs de bord)", edge)):
+        pos = len(_stream_positions(keys, supers, ref256))
+        print(f"  Capacité {label} : {pos} positions = "
+              f"{max_message_for(pos)} caractères")
 
 if __name__ == '__main__':
     print("="*54)
     print("GRILLE 90×90 — STRUCTURE QR LA LIVRÉE D'HERMÈS")
     print("="*54+"\n")
-    print_map()
-
     ref256, _ = load_referents()
 
     # Générer des clés pour 9×9 = 81 blocs (super-blocs centraux)
@@ -222,6 +255,8 @@ if __name__ == '__main__':
 
     real_keys = {'steg_key':real_sk,'key_b':real_kb,'key_c':real_kc,'key_2':real_k2}
     lure_keys = {'steg_key':lure_sk,'key_b':lure_kb,'key_c':lure_kc,'key_2':lure_k2}
+
+    print_map(real_keys, ref256)
 
     print("\nConstruction...")
     grid = make_grid_90("ANIBALAMIOTX", real_keys,

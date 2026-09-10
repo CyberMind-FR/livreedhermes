@@ -420,6 +420,11 @@ def _carter_positions(br: int, bc: int, g: Dict, ref256: List[Dict]) -> List[Tup
     return [(r0+r, c0+c) for r, c in t
             if 0 <= r0+r < CARTER_GRID and 0 <= c0+c < CARTER_GRID]
 
+def _carter_message_positions(grammar: List[Dict], ref256: List[Dict]) -> int:
+    """Nombre de positions rendues par les blocs message de cette grammaire."""
+    return sum(len(_carter_positions(i // CARTER_SIDE, i % CARTER_SIDE, g, ref256))
+               for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+
 def encode_carter(message: str, master_key: bytes,
                   ref256: List[Dict]) -> List[List[int]]:
     """
@@ -438,17 +443,22 @@ def encode_carter(message: str, master_key: bytes,
     import secrets as _sec
     xchacha_key, grammar_key = _carter_split(master_key)
     grammar = _carter_grammar(grammar_key, ref256)
-    n_msg   = sum(1 for g in grammar if g['role'] == _MESSAGE)
 
     payload = _encrypt(message, xchacha_key)
     # Même flux de symboles base-44 que encode() : les nibbles [0..15]
     # trahissaient les cellules message dans un bruit couvrant [0..43].
     nibbles = payload_to_symbols(payload)
 
-    if len(nibbles) > n_msg * 6:
+    # Positions réellement rendues, comptées comme le fait la boucle
+    # d'écriture ci-dessous. Les 512 formes Ref256 comptent aujourd'hui
+    # 6 points chacune et la grille est alignée sur les blocs, donc
+    # n_pos == n_msg*6 ; le produit resterait juste par coïncidence, et
+    # la garde doit porter sur ce que l'encodeur écrit vraiment.
+    n_pos = _carter_message_positions(grammar, ref256)
+    if len(nibbles) > n_pos:
         raise ValueError(
             f"Message trop long pour la grammaire dérivée : "
-            f"{len(message)} caractères > {max_message_for(n_msg * 6)} "
+            f"{len(message)} caractères > {max_message_for(n_pos)} "
             f"disponibles. Changer la clé ou réduire le message.")
 
     grid  = [[_sec.randbelow(ALPHA_LEN) for _ in range(CARTER_GRID)]
@@ -485,9 +495,7 @@ def carter_capacity(master_key: bytes, ref256: List[Dict]) -> Dict:
     n_msg = sum(1 for g in grammar if g['role'] == _MESSAGE)
     n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
     n_pur = sum(1 for g in grammar if g['role'] == _PURE)
-    overhead = 4 + 24 + 16   # header + nonce + tag XChaCha20
-    n_pos = sum(len(_carter_positions(i // CARTER_SIDE, i % CARTER_SIDE, g, ref256))
-                for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+    n_pos = _carter_message_positions(grammar, ref256)
     return {
         'blocs_message':    n_msg,
         'blocs_structure':  n_str,
@@ -560,6 +568,12 @@ def _carter360_positions(br: int, bc: int,
     return [(r0+r, c0+c) for r, c in pts
             if 0 <= r0+r < CARTER360_GRID and 0 <= c0+c < CARTER360_GRID]
 
+def _carter360_message_positions(grammar: List[Dict], ref360: List[Dict]) -> int:
+    """Nombre de positions rendues par les blocs message de cette grammaire."""
+    return sum(len(_carter360_positions(i // CARTER360_SIDE, i % CARTER360_SIDE,
+                                        g, ref360))
+               for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+
 def encode_carter_360(message: str, master_key: bytes,
                        ref360: Optional[List[Dict]] = None) -> List[List[int]]:
     """
@@ -570,7 +584,12 @@ def encode_carter_360(message: str, master_key: bytes,
       'structuré' → forme Ref360 appliquée, valeurs aléatoires
       'message'   → forme Ref360 appliquée, valeurs = message XChaCha20
 
-    Capacité utile : ~256 caractères (vs ~181 pour Carter 90×90 Ref256).
+    Capacité utile : 152 caractères en moyenne sur 200 clés (49 à 246),
+    contre 214 pour Carter 90×90 Ref256. Les formes Ref360 ne rendent que
+    1 à 3 points par couleur, d'où une capacité inférieure à celle du
+    Ref256 malgré une grille plus grande. La grammaire étant dérivée de la
+    clé, la capacité varie fortement d'une clé à l'autre :
+    carter360_capacity() donne le chiffre exact pour une clé donnée.
     """
     import secrets as _sec
     if ref360 is None:
@@ -585,12 +604,11 @@ def encode_carter_360(message: str, master_key: bytes,
     # trahissaient les cellules message dans un bruit couvrant [0..43].
     nibbles = payload_to_symbols(payload)
 
-    # Positions réellement disponibles : une forme Ref360 peut compter moins
-    # de 8 points pour la couleur tirée, et se tronque au bord de la grille.
-    # Le produit n_msg*8 annonçait donc une capacité inatteignable.
-    n_pos = sum(len(_carter360_positions(i // CARTER360_SIDE, i % CARTER360_SIDE,
-                                        g, ref360))
-                for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+    # Positions réellement disponibles : une forme Ref360 ne compte que
+    # 1 à 3 points pour la couleur tirée, jamais 8, et se tronque au bord
+    # de la grille. Le produit n_msg*8 annonçait donc une capacité
+    # inatteignable — environ 1,7 fois la capacité réelle.
+    n_pos = _carter360_message_positions(grammar, ref360)
     if len(nibbles) > n_pos:
         raise ValueError(
             f"Message trop long : {len(message)} caractères > "
@@ -633,19 +651,20 @@ def carter360_capacity(master_key: bytes,
     n_msg = sum(1 for g in grammar if g['role'] == _MESSAGE)
     n_str = sum(1 for g in grammar if g['role'] == _STRUCTURED)
     n_pur = sum(1 for g in grammar if g['role'] == _PURE)
-    # Positions réellement disponibles : une forme Ref360 peut compter moins
-    # de 8 points pour la couleur tirée, et se tronque au bord de la grille.
-    # Le produit n_msg*8 annonçait donc une capacité inatteignable.
-    n_pos = sum(len(_carter360_positions(i // CARTER360_SIDE, i % CARTER360_SIDE,
-                                        g, ref360))
-                for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+    # Positions réellement disponibles : une forme Ref360 ne compte que
+    # 1 à 3 points pour la couleur tirée, jamais 8, et se tronque au bord
+    # de la grille. Le produit n_msg*8 annonçait donc une capacité
+    # inatteignable — environ 1,7 fois la capacité réelle.
+    n_pos = _carter360_message_positions(grammar, ref360)
     return {
         'referent':         '360',
         'grille':           f'{CARTER360_GRID}×{CARTER360_GRID}',
         'blocs_message':    n_msg,
         'blocs_structure':  n_str,
         'blocs_purs':       n_pur,
-        'positions_bloc':   8,
+        # Moyenne constatée, et non la constante 8 d'avant : les formes
+        # Ref360 rendent 1 à 3 points selon la couleur tirée.
+        'positions_bloc':   (n_pos / n_msg) if n_msg else 0,
         'nibbles':          n_pos,
         'bytes_utiles':     max_message_for(n_pos),
         'chars_max':        max_message_for(n_pos),
@@ -734,6 +753,13 @@ def _mix_positions(mbr: int, mbc: int,
         return [(r0+r, c0+c) for r, c in pts
                 if 0 <= r0+r < N and 0 <= c0+c < N]  # 8
 
+def _mix_message_positions(grammar: List[Dict], ref256: List[Dict],
+                           ref360: List[Dict]) -> int:
+    """Nombre de positions rendues par les blocs message de cette grammaire."""
+    return sum(len(_mix_positions(i // CARTER_MIX_SIDE, i % CARTER_MIX_SIDE,
+                                  g, ref256, ref360))
+               for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+
 def encode_carter_mix(message: str, master_key: bytes,
                        ref256: List[Dict],
                        ref360: Optional[List[Dict]] = None) -> List[List[int]]:
@@ -753,9 +779,7 @@ def encode_carter_mix(message: str, master_key: bytes,
     xchacha_key, grammar_key = _carter_mix_split(master_key)
     grammar = _carter_mix_grammar(grammar_key, ref256, ref360)
     # Calculer la capacité
-    nibbles_cap = sum(len(_mix_positions(i//CARTER_MIX_SIDE, i%CARTER_MIX_SIDE,
-                                          g, ref256, ref360))
-                      for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+    nibbles_cap = _mix_message_positions(grammar, ref256, ref360)
 
     payload = _encrypt(message, xchacha_key)
     # Même flux de symboles base-44 que encode() : les nibbles [0..15]
@@ -811,9 +835,7 @@ def carter_mix_capacity(master_key: bytes,
     # La capacité doit être calculée comme le fait l'encodeur : une forme
     # tronquée au bord de la grille rend moins de 24 (ou 8) positions.
     # L'ancien produit n256m*24 + n360m*8 annonçait jusqu'à 12 % de trop.
-    nibs  = sum(len(_mix_positions(i // CARTER_MIX_SIDE, i % CARTER_MIX_SIDE,
-                                   g, ref256, ref360))
-                for i, g in enumerate(grammar) if g['role'] == _MESSAGE)
+    nibs  = _mix_message_positions(grammar, ref256, ref360)
     return {
         'grille':              f'{CARTER_MIX_GRID}×{CARTER_MIX_GRID}',
         'meta_blocs':          CARTER_MIX_N,
