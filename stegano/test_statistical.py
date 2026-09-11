@@ -48,6 +48,8 @@ from carter_random import (
     encode_carter_random, decode_carter_random,
     encode_carter_random_360, decode_carter_random_360,
     random_capacity, random_fits, SEEDS,
+    encode_carter_18, decode_carter_18, carter18_fits,
+    encode_carter_hybrid, decode_carter_hybrid, carter_hybrid_fits,
     _carter_split, _derive_params,
 )
 
@@ -626,6 +628,173 @@ class TestCarterRandomAvalanche(unittest.TestCase):
         print(f"  Avalanche msg symboles : mean={mean:.3f} (attendu >0.80 — ChaCha20-HKDF)")
 
 
+class TestCarter18Statistical(unittest.TestCase):
+    """
+    Carter-18 (meta-blocs concentriques 18x18) — chi2, avalanche de
+    grammaire, round-trip. Meme structure que TestCarterRandomChiSquare +
+    TestCarterRandomAvalanche, appliquee au mode Carter-18.
+    """
+
+    MSG        = "ANIBALAMIOTX"
+    N_GRIDS    = 10
+    DF         = ALPHA_LEN - 1   # 43 degres de liberte
+    CHI2_SEUIL = 59.3            # seuil a alpha=0.05
+    BITS       = 16
+    N_ROUNDTRIP = 20
+
+    def _chi2_stat(self, flat):
+        n   = len(flat)
+        exp = n / ALPHA_LEN
+        return sum((flat.count(v) - exp)**2 / exp for v in range(ALPHA_LEN))
+
+    def test_chi2_carter_18(self):
+        """Chi2 sur les cellules message : distribution uniforme sur [0..43]."""
+        try:
+            import scipy.stats as st
+        except ImportError:
+            self.skipTest("scipy non installe")
+        chi2s, ps = [], []
+        for _ in range(self.N_GRIDS):
+            k = os.urandom(32)
+            if not carter18_fits(self.MSG, k): continue
+            grid, _ = encode_carter_18(self.MSG, k)
+            flat = [v for row in grid for v in row]
+            c    = self._chi2_stat(flat)
+            p    = 1 - st.chi2.cdf(c, self.DF)
+            chi2s.append(c); ps.append(p)
+        if not chi2s:
+            self.skipTest("Aucune cle valide")
+        mean_c = statistics.mean(chi2s)
+        mean_p = statistics.mean(ps)
+        bad    = sum(1 for c in chi2s if c > self.CHI2_SEUIL)
+        self.assertLessEqual(bad, 2,
+            f"Carter-18 chi2 : {bad}/{len(chi2s)} grilles au-dessus du seuil")
+        print(f"  chi2 Carter-18     : mean={mean_c:.1f}  p={mean_p:.3f}  "
+              f"seuil={self.CHI2_SEUIL}  echecs={bad}/{len(chi2s)}")
+
+    def test_grammar_avalanche_carter_18(self):
+        """Avalanche de grammaire : flip 1 bit cle -> >35% des blocs changent de role."""
+        from carter_random import _grammar_18, _MESSAGE, GRID_SIZE
+        key = os.urandom(32)
+        ratios = []
+        for bit in range(self.BITS):
+            key2 = bytearray(key)
+            key2[bit // 8] ^= (1 << (bit % 8))
+            key2 = bytes(key2)
+            _, gk1 = _carter_split(key)
+            _, gk2 = _carter_split(bytes(key2))
+            g1 = _grammar_18(gk1, GRID_SIZE)
+            g2 = _grammar_18(gk2, GRID_SIZE)
+            roles1 = [1 if x["role"]==_MESSAGE else 0 for x in g1]
+            roles2 = [1 if x["role"]==_MESSAGE else 0 for x in g2]
+            n = min(len(roles1), len(roles2))
+            diff = sum(1 for a,b in zip(roles1[:n],roles2[:n]) if a!=b)
+            ratios.append(diff/n)
+        mean = statistics.mean(ratios)
+        self.assertGreater(mean, 0.35,
+            f"Grammar avalanche Carter-18 trop faible : {mean:.3f} < 0.35")
+        print(f"  Grammar avalanche Carter-18 : mean={mean:.3f} (attendu > 0.35)")
+
+    def test_roundtrip_carter_18(self):
+        """Round-trip sur 20 cles aleatoires."""
+        ok, tried = 0, 0
+        for _ in range(self.N_ROUNDTRIP):
+            k = os.urandom(32)
+            if not carter18_fits(self.MSG, k): continue
+            tried += 1
+            grid, _ = encode_carter_18(self.MSG, k)
+            dec = decode_carter_18(grid, k)
+            self.assertEqual(dec, self.MSG,
+                f"Rupture round-trip Carter-18 pour une cle valide")
+            ok += 1
+        self.assertGreater(tried, 0, "Aucune cle valide sur 20 essais")
+        print(f"  Round-trip Carter-18 : {ok}/{tried} cles valides, 0 echec")
+
+
+class TestCarterHybridStatistical(unittest.TestCase):
+    """
+    Carter-Hybrid (meta-blocs 18x18 concentriques + 6x6 mixtes) — chi2,
+    avalanche de grammaire, round-trip. Meme structure que
+    TestCarterRandomChiSquare + TestCarterRandomAvalanche, appliquee au
+    mode Carter-Hybrid.
+    """
+
+    MSG        = "ANIBALAMIOTX"
+    N_GRIDS    = 10
+    DF         = ALPHA_LEN - 1   # 43 degres de liberte
+    CHI2_SEUIL = 59.3            # seuil a alpha=0.05
+    BITS       = 16
+    N_ROUNDTRIP = 20
+
+    def _chi2_stat(self, flat):
+        n   = len(flat)
+        exp = n / ALPHA_LEN
+        return sum((flat.count(v) - exp)**2 / exp for v in range(ALPHA_LEN))
+
+    def test_chi2_carter_hybrid(self):
+        """Chi2 sur les cellules message : distribution uniforme sur [0..43]."""
+        try:
+            import scipy.stats as st
+        except ImportError:
+            self.skipTest("scipy non installe")
+        chi2s, ps = [], []
+        for _ in range(self.N_GRIDS):
+            k = os.urandom(32)
+            if not carter_hybrid_fits(self.MSG, k): continue
+            grid, _ = encode_carter_hybrid(self.MSG, k)
+            flat = [v for row in grid for v in row]
+            c    = self._chi2_stat(flat)
+            p    = 1 - st.chi2.cdf(c, self.DF)
+            chi2s.append(c); ps.append(p)
+        if not chi2s:
+            self.skipTest("Aucune cle valide")
+        mean_c = statistics.mean(chi2s)
+        mean_p = statistics.mean(ps)
+        bad    = sum(1 for c in chi2s if c > self.CHI2_SEUIL)
+        self.assertLessEqual(bad, 2,
+            f"Carter-Hybrid chi2 : {bad}/{len(chi2s)} grilles au-dessus du seuil")
+        print(f"  chi2 Carter-Hybrid : mean={mean_c:.1f}  p={mean_p:.3f}  "
+              f"seuil={self.CHI2_SEUIL}  echecs={bad}/{len(chi2s)}")
+
+    def test_grammar_avalanche_carter_hybrid(self):
+        """Avalanche de grammaire : flip 1 bit cle -> >35% des blocs changent de role."""
+        from carter_random import _grammar_hybrid, _MESSAGE, GRID_SIZE
+        key = os.urandom(32)
+        ratios = []
+        for bit in range(self.BITS):
+            key2 = bytearray(key)
+            key2[bit // 8] ^= (1 << (bit % 8))
+            key2 = bytes(key2)
+            _, gk1 = _carter_split(key)
+            _, gk2 = _carter_split(bytes(key2))
+            g1 = _grammar_hybrid(gk1, GRID_SIZE)
+            g2 = _grammar_hybrid(gk2, GRID_SIZE)
+            roles1 = [1 if x["role"]==_MESSAGE else 0 for x in g1]
+            roles2 = [1 if x["role"]==_MESSAGE else 0 for x in g2]
+            n = min(len(roles1), len(roles2))
+            diff = sum(1 for a,b in zip(roles1[:n],roles2[:n]) if a!=b)
+            ratios.append(diff/n)
+        mean = statistics.mean(ratios)
+        self.assertGreater(mean, 0.35,
+            f"Grammar avalanche Carter-Hybrid trop faible : {mean:.3f} < 0.35")
+        print(f"  Grammar avalanche Carter-Hybrid : mean={mean:.3f} (attendu > 0.35)")
+
+    def test_roundtrip_carter_hybrid(self):
+        """Round-trip sur 20 cles aleatoires."""
+        ok, tried = 0, 0
+        for _ in range(self.N_ROUNDTRIP):
+            k = os.urandom(32)
+            if not carter_hybrid_fits(self.MSG, k): continue
+            tried += 1
+            grid, _ = encode_carter_hybrid(self.MSG, k)
+            dec = decode_carter_hybrid(grid, k)
+            self.assertEqual(dec, self.MSG,
+                f"Rupture round-trip Carter-Hybrid pour une cle valide")
+            ok += 1
+        self.assertGreater(tried, 0, "Aucune cle valide sur 20 essais")
+        print(f"  Round-trip Carter-Hybrid : {ok}/{tried} cles valides, 0 echec")
+
+
 class TestCarterRandomSummary(unittest.TestCase):
     """Tableau recapitulatif Carter Random — toutes metriques."""
 
@@ -637,11 +806,15 @@ class TestCarterRandomSummary(unittest.TestCase):
         except ImportError:
             self.skipTest("scipy non installe")
         key = os.urandom(32)
-        while not random_fits(self.MSG, key): key = os.urandom(32)
+        while not (random_fits(self.MSG, key) and carter18_fits(self.MSG, key)
+                   and carter_hybrid_fits(self.MSG, key)):
+            key = os.urandom(32)
 
         results = {}
         for label, fn in [('Random 90', encode_carter_random),
-                           ('Random 360', encode_carter_random_360)]:
+                           ('Random 360', encode_carter_random_360),
+                           ('Carter-18', encode_carter_18),
+                           ('Carter-Hybrid', encode_carter_hybrid)]:
             grid, _ = fn(self.MSG, key)
             flat = [v for row in grid for v in row]
             n    = len(flat)
@@ -682,7 +855,9 @@ if __name__ == '__main__':
                 TestChiSquare, TestAutocorrelation, TestSerialCorrelation,
                 TestSummary,
                 TestCarterRandomCapacity, TestCarterRandomChiSquare,
-                TestCarterRandomAvalanche, TestCarterRandomSummary]:
+                TestCarterRandomAvalanche,
+                TestCarter18Statistical, TestCarterHybridStatistical,
+                TestCarterRandomSummary]:
         suite.addTests(loader.loadTestsFromTestCase(cls))
 
     runner = unittest.TextTestRunner(verbosity=2)
