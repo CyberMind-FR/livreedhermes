@@ -11,8 +11,11 @@ Architecture :
   - Lecture concentrique dans les méta-blocs : noyau → anneau → coins
 
 Paramètres dérivés de la clé (transparents pour l'appelant) :
-  seed ∈ {10 valeurs}  ×  direction ∈ {4}  ×  mode ∈ {2}
-  → 20 480 configurations géométriques distinctes, toutes inaccessibles sans la clé.
+  seed ∈ {10 valeurs}  ×  mode ∈ {2}  → 20 configurations globales, toutes
+  inaccessibles sans la clé. Direction et forme sont tirées par bloc dans
+  la grammaire (entropie de grammaire, non de configuration globale). Le
+  mode méta bascule vers le mode individuel si sa capacité est insuffisante
+  pour la clé donnée (CR-1, voir _derive_params).
 
 Module autonome : les référents sont générés dynamiquement depuis la clé
 (pas de fichier JSON à charger). Réutilise les primitives déjà auditées de
@@ -124,11 +127,30 @@ def _derive_params(grammar_key: bytes) -> Tuple[int, bool]:
     Retourne (seed, meta_mode) depuis grammar_key.
     meta_mode=True  : lecture par méta-blocs 18×18 (concentrique)
     meta_mode=False : lecture bloc à bloc 6×6
+
+    CR-1 (audit G. Kerma, rév. 2) : le mode méta ne tire que 25 rôles
+    (variance ~35 %) et peut produire une capacité quasi nulle pour
+    certaines clés. Si la capacité méta calculée pour cette clé est
+    insuffisante, bascule déterministe vers le mode individuel — le
+    basculement est reproductible au décodage car il ne dépend que de la
+    clé, jamais d'un tirage séparé.
     """
     km = _HKDF(_hh.SHA256(), 4, salt=b'Carter-params-v3',
                info=b'seed-and-mode').derive(grammar_key)
-    seed      = SEEDS[km[0] % len(SEEDS)]
-    meta_mode = km[1] < 128   # ~50 % de chances
+    seed     = SEEDS[km[0] % len(SEEDS)]
+    meta_raw = km[1] < 128   # ~50 % de chances
+
+    if meta_raw:
+        ref   = get_referent(seed)
+        mg    = _grammar_meta(grammar_key, ref)
+        n_msg = sum(1 for x in mg if x['role'] == _MESSAGE)
+        cap   = max_message_for(n_msg * META * META * CELL_SIZE)
+        # Seuil 60 caractères : le mode individuel garantit toujours plus
+        # (225 blocs, variance ~12 %). En dessous, on bascule.
+        meta_mode = cap >= 60
+    else:
+        meta_mode = False
+
     return seed, meta_mode
 
 # ── Grammaire individuelle ──────────────────────────────────────────────────────
