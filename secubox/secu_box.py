@@ -13,12 +13,14 @@ La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
 5. Chiffrement      : XChaCha20-Poly1305 (stegano_lib.py)
 6. Dissimulation    : géométrie La Livrée d'Hermès
 
-Zones déni plausible (grille 60×60 = 100 blocs 6×6) :
-  Chaque clé dérive ses blocs depuis son propre steg_key uniquement (fix
-  LH-2 v2, audit G. Kerma, rév. 2) — aucun secret partagé entre les deux
-  côtés, jamais un découpage fixe. Sans la clé réelle, la suite de blocs
-  du message réel n'est pas calculable, même en détenant la clé de
-  contrainte.
+Zones déni plausible (grille 90×90 = 225 blocs 6×6) :
+  Chaque clé dérive ses blocs depuis (son propre steg_key, un counter)
+  (fix LH-2 v3, audit G. Kerma, rév. 3) — aucun secret partagé entre les
+  deux côtés. Remplace la v2 (exclusion depuis une permutation
+  canonique) : vérifié par exécution, la v2 laissait retrouver 48/50
+  blocs réels depuis la seule clé de contrainte, sans aucun faux positif
+  — voir _derive_block_sequence() pour le mécanisme de la fuite et sa
+  correction.
   → aucune collision possible entre les deux messages
 """
 
@@ -280,130 +282,205 @@ def _km_to_keys(km: bytes, ref256: List[Dict], session_id: str,
 
 
 # ── Déni plausible ────────────────────────────────────────────────────────────
-def _derive_block_order(steg_key: bytes, n_blocks: int,
-                         exclude: Optional[set] = None) -> List[int]:
+def _derive_block_sequence(steg_key: bytes, counter: int, n_blocks: int) -> List[int]:
     """
-    LH-2 v2 (audit G. Kerma, rév. 2) : dérive une suite ordonnée de blocs
-    depuis steg_key UNIQUEMENT — pas de secret partagé entre les deux clés.
+    LH-2 v3 (audit G. Kerma, rév. 3) : dérive une suite ordonnée de blocs
+    depuis (steg_key, counter) via HKDF + Fisher-Yates.
 
-    La v1 de ce correctif tirait la partition d'un session_seed commun aux
-    deux jeux de clés : un porteur de la seule clé de contrainte pouvait
-    donc toujours recalculer l'emplacement exact des blocs du message réel
-    (sans pouvoir les déchiffrer). Ici, chaque côté dérive sa propre suite
-    de blocs depuis son propre steg_key ; sans la clé réelle, la suite de
-    blocs réels n'est pas calculable du tout — pas même son existence en
-    tant qu'ensemble précis.
+    Remplace _derive_block_order (v2), qui filtrait par exclusion
+    (exclude=real_set) une permutation CANONIQUE dérivée de dsk seul. La
+    faille : un porteur de la seule clé de contrainte peut recalculer
+    cette même permutation canonique (dsk, sans exclusion) et la comparer
+    à la duress_order réellement stockée dans sa clé — tout écart entre
+    les deux (un bloc présent dans la permutation canonique mais absent
+    de duress_order) a nécessairement été retiré par exclusion, donc
+    appartient à real_set. Vérifié PAR EXÉCUTION (audit G. Kerma, pas une
+    analyse théorique) : cette comparaison retrouve 48/50 blocs réels
+    sans aucun faux positif sur la v2, depuis la seule clé de contrainte.
 
-    L'encodeur appelle avec exclude=real_set pour éviter toute collision
-    avec les blocs déjà pris par le message réel ; le décodeur n'a besoin
-    que de sa propre clé et de la suite déjà résolue, stockée dans ses clés.
+    Ici, chaque candidat (steg_key, counter) produit une permutation
+    COMPLÈTE et INDÉPENDANTE (nouvel info HKDF par valeur de counter) —
+    rien n'est jamais filtré depuis un ordre canonique commun. Il n'existe
+    donc aucune version « non filtrée » à comparer à la séquence stockée
+    pour en déduire quels blocs auraient été exclus.
+
+    La suite est entièrement re-dérivable depuis (steg_key, counter) —
+    rien d'autre n'est stocké dans la clé. Un porteur avec ces deux
+    valeurs recalcule exactement la même suite que l'encodeur.
     """
     km = HKDF(hashes.SHA256(), n_blocks * 4,
-              salt=b'deniable-blocks-v2',
-              info=b'block-sequence').derive(steg_key)
+              salt=b'deniable-v3',
+              info=b'deniable-blocks-v3-' + counter.to_bytes(4, 'big')
+              ).derive(steg_key)
     order = list(range(n_blocks))
     for i in range(n_blocks - 1, 0, -1):
         j = int.from_bytes(km[i*4:i*4+4], 'big') % (i + 1)
         order[i], order[j] = order[j], order[i]
-    if exclude:
-        return [b for b in order if b not in exclude]
     return order
 
 def encode_deniable(
     real_message:   str,
     duress_message: str,
-    ref256:         List[Dict],
-    grid_size:      int = 60,
+    ref256:         Optional[List[Dict]] = None,
+    grid_size:      int = 90,
 ) -> Tuple[List[List[int]], Dict, Dict]:
     """
-    Encode deux messages dans une grille unique (fix LH-2 v2, audit
-    G. Kerma, rév. 2) :
-    • chaque clé dérive ses blocs depuis son propre steg_key uniquement,
-      sans secret partagé entre les deux côtés ;
-    • l'encodeur arbitre les collisions : les blocs réels ont priorité, les
-      blocs de contrainte sautent ceux déjà pris ;
-    • block_sequence, stocké dans chaque jeu de clés, ne révèle que les
-      blocs de CE message — jamais ceux de l'autre.
+    Encode deux messages dans une grille unique.
+
+    LH-2 v3 (audit G. Kerma, rév. 3) — remplace v2 (fixe une fuite
+    vérifiée par exécution, pas seulement théorique : 48/50 blocs réels
+    retrouvés depuis la seule clé de contrainte, voir
+    _derive_block_sequence()). Propriétés :
+    • Chaque clé stocke uniquement (steg_key, counter, n_blocks, key_2) —
+      la suite de blocs se re-dérive à l'identique depuis (steg_key,
+      counter), rien n'est stocké en plus.
+    • L'encodeur incrémente le counter de la clé de contrainte (0..65535)
+      jusqu'à disjonction avec les blocs réels.
+    • Allocation exacte à la taille du message (blocks_needed), pas une
+      répartition fixe 50/50 comme en v2.
+
+    Tradeoff assumé, à documenter plutôt qu'à cacher : contrairement au
+    50/50 fixe de la v2, le nombre de blocs alloués ici est proportionnel
+    à la longueur du message. Si les deux messages ont une longueur
+    proche, n_blocks_real ≈ n_blocks_duress devient observable par qui
+    détient LES DEUX clés — ce que le 50/50 fixe de la v2 évitait par
+    construction. Mais un porteur de la SEULE clé de contrainte reste
+    dans l'incapacité totale de localiser les blocs réels sans rsk : par
+    construction (voir _derive_block_sequence), il n'existe aucune
+    permutation « non filtrée » à comparer pour en déduire les blocs
+    exclus. C'est un tradeoff acceptable face à la fuite concrète —
+    démontrée par exécution, pas seulement redoutée en théorie — de la v2.
 
     Retourne (grid, real_keys, duress_keys).
+    ref256 : ignoré (conservé pour compatibilité d'API avec la v2).
     """
+    from carter_random import get_referent, _derive_params, _derive_masks, CELL_SIZE, N_FORMS, N_DIR
+    from stegano_lib import _carter_split
+
     N = grid_size; B = N // 6
     n_blocks = B * B
-    n_half   = n_blocks // 2
+
     grid = [[secrets.randbelow(ALPHA_LEN) for _ in range(N)]
              for _ in range(N)]
 
-    def gen_keys(n: int) -> Tuple:
-        return (
-            secrets.token_bytes(32),
-            [1] * n,
-            [[secrets.randbelow(8)] for _ in range(n)],
-            [{'form_id': secrets.randbelow(len(ref256)),
-              'color':   secrets.choice(['blue', 'orange'])}
-             for _ in range(n)],
-        )
+    rsk = secrets.token_bytes(32)
+    dsk = secrets.token_bytes(32)
 
-    rsk, rkb, rkc, rk2 = gen_keys(n_half)
-    dsk, dkb, dkc, dk2 = gen_keys(n_half)
-
-    real_order   = _derive_block_order(rsk, n_blocks)[:n_half]
-    real_set     = set(real_order)
-    duress_order = _derive_block_order(dsk, n_blocks, exclude=real_set)[:n_half]
-
-    def place(msg: str, sk, kb, kc, k2, block_indices):
+    def payload_and_nibbles(msg: str, sk: bytes):
         payload = _encrypt(msg, sk)
         # Même flux de symboles base-44 que stegano_lib.encode() : les
         # nibbles [0..15] trahissaient les cellules message dans un bruit
         # couvrant [0..43].
-        nibbles = payload_to_symbols(payload)
+        return payload_to_symbols(payload)
+
+    def blocks_needed(nibbles, cell_size=CELL_SIZE) -> int:
+        """Nombre de blocs 6×6 nécessaires pour écrire len(nibbles) symboles."""
+        return max(1, -(-len(nibbles) // cell_size))  # ceil
+
+    def place(nibbles, sk, k2, block_indices):
+        _, gk_local   = _carter_split(sk)
+        seed_local, _ = _derive_params(gk_local)
+        ref_local     = get_referent(seed_local)
+        masks_local   = _derive_masks(gk_local, len(nibbles) + 64)
         ni = 0; blk = 0
-        while blk < len(kb) and ni < len(nibbles):
+        while blk < len(k2) and ni < len(nibbles):
             idx    = block_indices[blk]
             br, bc = idx // B, idx % B
             fk     = k2[blk]
-            form   = ref256[fk['form_id'] % len(ref256)]
-            base   = form[fk.get('color', 'blue')]
-            for r, c in apply_orientation(base, kc[blk][0]):
+            form   = ref_local[fk['form_id'] % len(ref_local)]
+            for r, c in form[fk['dir']]:
                 if ni >= len(nibbles): break
                 gr, gc = br*6+r, bc*6+c
                 if 0 <= gr < N and 0 <= gc < N:
-                    grid[gr][gc] = nibbles[ni]; ni += 1
+                    grid[gr][gc] = (nibbles[ni]+masks_local[ni]) % ALPHA_LEN
+                ni += 1
             blk += 1
 
-    place(real_message,   rsk, rkb, rkc, rk2, real_order)
-    place(duress_message, dsk, dkb, dkc, dk2, duress_order)
+    real_nibs   = payload_and_nibbles(real_message,   rsk)
+    duress_nibs = payload_and_nibbles(duress_message, dsk)
 
-    real_keys   = {'steg_key': rsk, 'key_b': rkb, 'key_c': rkc, 'key_2': rk2,
-                   'block_sequence': real_order}
-    duress_keys = {'steg_key': dsk, 'key_b': dkb, 'key_c': dkc, 'key_2': dk2,
-                   'block_sequence': duress_order}
+    n_real   = blocks_needed(real_nibs)
+    n_duress = blocks_needed(duress_nibs)
+    if n_real > n_blocks or n_duress > n_blocks:
+        raise ValueError(
+            f"Message trop long pour la grille déniable {N}×{N} "
+            f"({n_blocks} blocs disponibles)")
+
+    r_counter = 0
+    real_seq  = _derive_block_sequence(rsk, r_counter, n_blocks)
+    real_set  = set(real_seq[:n_real])
+
+    # Chercher un counter pour la clé de contrainte tel que les deux
+    # suites soient disjointes — chaque counter produit une permutation
+    # complète indépendante (voir _derive_block_sequence).
+    for d_counter in range(65536):
+        duress_seq = _derive_block_sequence(dsk, d_counter, n_blocks)
+        if not real_set & set(duress_seq[:n_duress]):
+            break
+    else:
+        raise ValueError(
+            "Aucune séquence de contrainte disjointe trouvée en 65536 essais")
+
+    rk2 = [{'form_id': secrets.randbelow(N_FORMS),
+             'dir':     secrets.randbelow(N_DIR)} for _ in range(n_real)]
+    dk2 = [{'form_id': secrets.randbelow(N_FORMS),
+             'dir':     secrets.randbelow(N_DIR)} for _ in range(n_duress)]
+
+    # Contrainte d'abord, réel en dernier : le message réel n'est jamais
+    # écrasé (les deux suites sont déjà disjointes par construction, donc
+    # purement défensif).
+    place(duress_nibs, dsk, dk2, duress_seq[:n_duress])
+    place(real_nibs,   rsk, rk2, real_seq[:n_real])
+
+    # Les clés ne stockent que (steg_key, counter, n_blocks, key_2) — la
+    # suite se re-dérive, aucun block_sequence stocké.
+    real_keys   = {'steg_key': rsk, 'counter': r_counter,
+                   'n_blocks': n_real,   'key_2': rk2}
+    duress_keys = {'steg_key': dsk, 'counter': d_counter,
+                   'n_blocks': n_duress, 'key_2': dk2}
     return grid, real_keys, duress_keys
 
 
 def decode_deniable(grid: List[List[int]], keys: Dict,
-                    ref256: List[Dict], grid_size: int = 60) -> str:
+                    ref256: Optional[List[Dict]] = None, grid_size: int = 90) -> str:
     """
-    Décode un message depuis la grille (fix LH-2 v2). Le décodeur n'utilise
-    que son steg_key et son block_sequence — aucun secret partagé, aucun
-    lien calculable vers l'autre message.
-    """
-    N = grid_size; B = N // 6
-    sk             = keys['steg_key']
-    kb             = keys['key_b']
-    kc             = keys['key_c']
-    k2             = keys['key_2']
-    block_sequence = keys['block_sequence']
+    Décode un message depuis la grille.
 
-    vals = []; blk = 0
-    while blk < len(kb):
-        idx    = block_sequence[blk]
+    LH-2 v3 : le décodeur re-dérive la suite de blocs depuis
+    (steg_key, counter) — identique à ce que l'encodeur a calculé. Aucune
+    information sur l'autre message n'est nécessaire ni accessible.
+    ref256 : ignoré (conservé pour compatibilité d'API avec la v2).
+    """
+    from carter_random import get_referent, _derive_params, _derive_masks, CELL_SIZE
+    from stegano_lib import _carter_split
+
+    N = grid_size; B = N // 6
+    n_blocks = B * B
+    sk      = keys['steg_key']
+    counter = keys['counter']
+    n_blk   = keys['n_blocks']
+    k2      = keys['key_2']
+
+    # Re-dériver la suite depuis (steg_key, counter) — reproductible à
+    # l'identique, rien d'autre n'est nécessaire.
+    block_seq = _derive_block_sequence(sk, counter, n_blocks)[:n_blk]
+
+    _, gk_local   = _carter_split(sk)
+    seed_local, _ = _derive_params(gk_local)
+    ref_local     = get_referent(seed_local)
+    masks_local   = _derive_masks(gk_local, len(k2) * CELL_SIZE + 64)
+
+    vals = []; ni = 0; blk = 0
+    while blk < len(k2):
+        idx    = block_seq[blk]
         br, bc = idx // B, idx % B
         fk     = k2[blk]
-        form   = ref256[fk['form_id'] % len(ref256)]
-        base   = form[fk.get('color', 'blue')]
-        for r, c in apply_orientation(base, kc[blk][0]):
+        form   = ref_local[fk['form_id'] % len(ref_local)]
+        for r, c in form[fk['dir']]:
             gr, gc = br*6+r, bc*6+c
-            if 0 <= gr < N and 0 <= gc < N: vals.append(grid[gr][gc])
+            if 0 <= gr < N and 0 <= gc < N:
+                vals.append((grid[gr][gc]-masks_local[ni]) % ALPHA_LEN)
+            ni += 1
         blk += 1
     return _decrypt(vals, sk)
 
@@ -465,15 +542,16 @@ def demo():
                      kb['key_c'], kb['key_2'], ref256)
     print(f"   Alice → Bob : '{msg}' → '{decoded}' ✓")
 
-    print("\n6. DÉNI PLAUSIBLE (2 messages, 1 grille 60×60)\n")
+    print("\n6. DÉNI PLAUSIBLE (2 messages, 1 grille 90×90, LH-2 v3)\n")
     grid_d, rk, dk = encode_deniable(
-        "MESSAGE SECRET ANIBAL", "NOTES PERSO TEXTILE", ref256)
-    real_out   = decode_deniable(grid_d, rk, ref256)
-    duress_out = decode_deniable(grid_d, dk, ref256)
+        "MESSAGE SECRET ANIBAL", "NOTES PERSO TEXTILE")
+    real_out   = decode_deniable(grid_d, rk)
+    duress_out = decode_deniable(grid_d, dk)
     print(f"   Clé réelle     → '{real_out}' ✓")
     print(f"   Clé contrainte → '{duress_out}' ✓")
-    print(f"   Chaque clé dérive ses blocs depuis son propre steg_key (fix LH-2 v2)")
+    print(f"   Chaque clé dérive ses blocs depuis (son propre steg_key, un counter) (fix LH-2 v3)")
     print(f"   Propriété : aucun secret partagé, blocs réels non calculables sans la clé réelle")
+    print(f"   (v2 le laissait faire : 48/50 blocs réels retrouvés par exécution, voir _derive_block_sequence)")
 
     print("\n7. IDENTITÉ EXPORTÉE\n")
     exported  = alice.export_private("passphrase_test")
