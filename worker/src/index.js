@@ -19,6 +19,11 @@
 
 import Stripe from 'stripe';
 
+// W1 : seules devises acceptées côté serveur. Le seuil minimum
+// (STRIPE_MIN_AMOUNT_CENTS) est exprimé dans cette devise ; toute autre est
+// refusée avant tout calcul de montant.
+const ALLOWED_CURRENCIES = ['eur'];
+
 // CORRECTIF AUDIT — origine de confiance.
 // success_url et cancel_url étaient construites depuis l'en-tête Origin de
 // la requête. Cet en-tête est libre pour tout client hors navigateur : un
@@ -83,7 +88,18 @@ async function handleCreateCheckoutSession(request, env) {
   }
 
   const amount = Math.round(Number(body.amount));
+  // CORRECTIF AUDIT W1 — devise fournie par le client.
+  // `currency` venait de la requête et n'était comparée au minimum
+  // (STRIPE_MIN_AMOUNT_CENTS, exprimé en centimes d'euro) sans aucune
+  // conversion : un client pouvait déclarer une devise sans décimales (jpy)
+  // ou de valeur très différente pour contourner le seuil, tout en payant
+  // dans une devise que le marchand n'accepte pas. Le palier « soutien » est
+  // libellé en euros comme le palier « pro » : on impose donc une liste
+  // blanche et on refuse toute autre devise.
   const currency = (body.currency || 'eur').toLowerCase();
+  if (!ALLOWED_CURRENCIES.includes(currency)) {
+    return json({ error: 'Devise non supportée' }, 400, request, env);
+  }
   const minAmount = Number(env.STRIPE_MIN_AMOUNT_CENTS || 100);
 
   if (!Number.isFinite(amount) || amount < minAmount) {
