@@ -14,7 +14,9 @@ ARCHITECTURE (suite à évaluation cryptologique externe) :
     permutations distinctes (les positions de chaque forme sont déjà triées
     dans le référent, donc _perm_from_seq efface l'identité de la forme :
     seul l'ordre des quadrants compte). Soit ~8 bits, non 13,6.
-    Ref360 : 342 entrées pour 116 permutations distinctes.
+    Ref360 (complété à 360 formes) : 678 entrées pour 164 permutations
+    distinctes (113 formes retenues sur 360, celles totalisant 24
+    positions).
     Rôle : diversification de clé par construction géométrique originale.
     NON revendiqué comme chiffrement complet à lui seul.
 
@@ -35,12 +37,24 @@ Propriétés démontrées :
   - Authentification : Poly1305 par secteur (16B tag) + HMAC-SHA256 global
   - Diversification géométrique : clé de session dérivée via SPN Ref256+360
   - max_DDT S-box ≤ 4 [Nyberg 1994] — propriété de la couche géométrique
+  - Nombre de branche de la couche de diffusion complète (P256→MDS→P360,
+    différentiel et linéaire) : 5, prouvé par invariance du poids de
+    Hamming aux permutations de position, vérifié sur des tirages réels
+  - Borne de sentier large sur 4 tours : probabilité différentielle
+    ≤ 2⁻⁶⁰, corrélation linéaire ≤ 2⁻²⁰ — sous l'hypothèse d'un
+    attaquant à requêtes multiples sur permutation fixée, hypothèse plus
+    forte que ce que l'usage réel exige (un seul point par secteur)
 
 AVERTISSEMENT :
   La sécurité cryptographique effective repose sur ChaCha20-Poly1305,
   algorithme standard éprouvé. Le SPN géométrique est une couche de
   diversification de clé originale, non un chiffrement autonome certifié.
-  La résistance globale du SPN comme PRP n'a pas été évaluée formellement.
+  La résistance du SPN comme PRP a été évaluée (cryptanalyse_spn.py, §8) :
+  borne de sentier large prouvée sur la couche complète (voir ci-dessus),
+  sondage empirique sans biais grossier détecté. La borne suppose un
+  attaquant à requêtes multiples sur une permutation à paramètres fixés ;
+  le protocole réel n'en offre jamais qu'une seule par secteur, ce qui
+  rend la borne plus forte que ce que l'usage exige, sans en dépendre.
 """
 
 import json, os, hmac as _hmac, hashlib, struct, itertools

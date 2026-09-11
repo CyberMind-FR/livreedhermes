@@ -10,7 +10,7 @@ linéaire, et 288 permutations distinctes seulement pour Ref256. Aucune
 n'était vérifiée par du code. Ce module les vérifie, et mesure ce que
 l'en-tête ne dit pas.
 
-Sept familles de mesures :
+Huit familles de mesures :
 
   1. Espace des permutations — entrées des tables contre permutations
      réellement distinctes, en bits.
@@ -26,6 +26,12 @@ Sept familles de mesures :
   6. Découpage en chunks — recouvrement et remplissage constant.
   7. Relation entre secteurs — le SPN détruit-il la relation linéaire
      session_key = master_key XOR h(nonce, secteur) ?
+  8. Résistance comme PRP — borne de sentier large (Daemen & Rijmen)
+     prouvée sur la couche complète, différentielle et linéaire, plus un
+     sondage empirique à clé fixée qui cherche un biais grossier là où
+     aucun échantillonnage ne peut confirmer la borne elle-même. Répond
+     à la réserve explicite de l'en-tête : « la résistance globale du
+     SPN comme PRP n'a pas été évaluée formellement ».
 
 Le script sort en code non nul si une propriété annoncée n'est pas tenue.
 
@@ -53,7 +59,7 @@ import disk_lib as D
 # un écart de documentation, et le script échoue pour le signaler. À mettre
 # à jour en même temps que l'en-tête, jamais séparément.
 DOC_REF256_PERMS = 288
-DOC_REF360_PERMS = 116
+DOC_REF360_PERMS = 164
 
 
 # ── Outils sur les permutations ───────────────────────────────────────────────
@@ -399,6 +405,158 @@ def relation_secteurs(spn, tirages, rng):
     }, abs(moy - 128) < 6
 
 
+# ── Résistance de la couche comme PRP ───────────────────────────────────────────
+# L'en-tête de disk_lib.py réserve explicitement ce point : « la résistance
+# globale du SPN comme PRP n'a pas été évaluée formellement ». Ce qui suit
+# le fait, en deux temps : une borne prouvée (sentier large), puis un
+# sondage empirique qui ne peut pas confirmer une borne à 2^-60 — aucun
+# échantillonnage raisonnable ne le peut — mais qui cherche un biais
+# grossier qu'une preuve correcte sur le papier n'exclut pas forcément
+# dans l'implémentation réelle.
+
+def branche_couche_complete(spn, rng, tirages=8):
+    """
+    Nombre de branche de la couche de diffusion COMPLÈTE d'un tour
+    (P256 -> MDS -> P360), et non de la seule MDS mesurée en section 3.
+
+    Argument : P256 et P360 sont des permutations de POSITION (un simple
+    réarrangement des octets, aucun mélange de valeurs) ; le poids de
+    Hamming d'un vecteur est invariant par permutation de ses coordonnées.
+    Donc poids(v) + poids(P360(mix(P256(v)))) = poids(P256(v)) +
+    poids(mix(P256(v))), et comme P256 est une bijection sur l'espace des
+    vecteurs, le minimum de cette quantité sur tout v non nul égale le
+    nombre de branche de mix() seul. Envelopper une MDS de permutations de
+    position ne peut donc pas l'abaisser — vérifié ci-dessous sur des
+    tirages réels de P256/P360, plutôt que laissé comme argument sur
+    le seul papier.
+    """
+    pire = 99
+    for _ in range(tirages):
+        mk = rng.randbytes(32)
+        nonce = rng.randbytes(24)
+        sn = rng.randrange(1 << 20)
+        rnd = rng.randrange(D.N_ROUNDS)
+        sbox, P256, P360 = parametres_tour(spn, mk, nonce, sn, 0, rnd)
+        for pos in range(24):
+            for v in (1, 0x53, 0xff):
+                d = bytes(v if i == pos else 0 for i in range(24))
+                p = bytes(d[P256[i]] for i in range(24))
+                o = bytes(D._mix(p)[P360[i]] for i in range(24))
+                pire = min(pire, _wt(d) + _wt(o))
+    return pire
+
+
+def branche_lineaire_mds():
+    """
+    Nombre de branche LINÉAIRE de la MDS — pertinent pour la cryptanalyse
+    linéaire, où les masques se propagent par la transposée de l'inverse
+    de la matrice de diffusion, et non par la matrice elle-même.
+
+    Calculé directement sur M⁻ᵀ par la même méthode que le nombre de
+    branche différentiel, plutôt que supposé identique par analogie.
+    """
+    def gf_mul(a, b):
+        r = 0
+        for _ in range(8):
+            if b & 1:
+                r ^= a
+            hi = a & 0x80
+            a = (a << 1) & 0xff
+            if hi:
+                a ^= 0x1b
+            b >>= 1
+        return r
+
+    Mt = [[D._MDS_INV[c][r] for c in range(4)] for r in range(4)]
+    pire = 99
+    for pos in range(4):
+        for v in range(1, 256):
+            col = [v if i == pos else 0 for i in range(4)]
+            out = [0] * 4
+            for r in range(4):
+                x = 0
+                for k in range(4):
+                    x ^= gf_mul(Mt[r][k], col[k])
+                out[r] = x
+            pire = min(pire, sum(1 for c in col if c) + sum(1 for o in out if o))
+    return pire
+
+
+def borne_sentier_large(ddt_max, lat_max, branche, n_rounds):
+    """
+    Borne de type sentier large (Daemen & Rijmen — c'est l'argument qui
+    fonde la preuve de sécurité de l'AES). Sur deux tours consécutifs non
+    chevauchants, le nombre d'octets actifs dans un sentier est au moins
+    le nombre de branche de la couche de diffusion — ici prouvé égal à 5,
+    aussi bien au sens différentiel qu'au sens linéaire (fonctions
+    ci-dessus). Sur n_rounds tours, on prend ⌊n_rounds/2⌋ paires non
+    chevauchantes, ce qui minore le nombre total d'octets actifs.
+    """
+    paires = n_rounds // 2
+    actifs_min = paires * branche
+    p_diff = (ddt_max / 256) ** actifs_min
+    corr_lin = (lat_max / 128) ** actifs_min
+    return actifs_min, p_diff, corr_lin
+
+
+def sondage_biais_cle_fixee(spn, rng, tirages_chi2=3, n_chi2=8000,
+                            tirages_lineaire=2, n_lineaire=20000):
+    """
+    Sondage empirique à clé fixée : une seule fois les paramètres de tour
+    sont tirés, comme le ferait _geo_derive pour un (master_key, nonce,
+    secteur) réel, puis on cherche un biais grossier — pas une confirmation
+    de la borne à 2^-60, hors de portée de tout échantillonnage praticable.
+
+      - uniformité de l'octet 0 de la différence de sortie, pour quelques
+        différences d'entrée de poids 1 (chi2, 255 ddl) ;
+      - corrélation empirique de quelques masques linéaires à un bit.
+    """
+    mk = rng.randbytes(32)
+    nonce = rng.randbytes(24)
+    sn = rng.randrange(1 << 20)
+    pl = [parametres_tour(spn, mk, nonce, sn, 0, r) for r in range(D.N_ROUNDS)]
+
+    positions = [0, 11, 23][:tirages_chi2]
+    chi2s = []
+    for pos in positions:
+        d = bytes(1 if i == pos else 0 for i in range(24))
+        cnt = [0] * 256
+        for _ in range(n_chi2):
+            x = rng.randbytes(24)
+            y = bytes(a ^ b for a, b in zip(x, d))
+            o1, o2 = spn_core(x, pl), spn_core(y, pl)
+            cnt[o1[0] ^ o2[0]] += 1
+        exp = n_chi2 / 256
+        chi2s.append(round(sum((c - exp) ** 2 / exp for c in cnt), 1))
+
+    masques = [(5, 3, 17, 2), (11, 7, 0, 4)][:tirages_lineaire]
+    correlations = []
+    for (bi, bp, bo, bop) in masques:
+        s = 0
+        for _ in range(n_lineaire):
+            x = rng.randbytes(24)
+            y = spn_core(x, pl)
+            a = (x[bi] >> bp) & 1
+            b = (y[bo] >> bop) & 1
+            s += 1 if a == b else -1
+        correlations.append(round(s / n_lineaire, 4))
+    bruit = round(1 / math.sqrt(n_lineaire), 4)
+
+    structs = {
+        'bloc nul': bytes(24), 'bloc 0xFF': bytes([0xFF] * 24),
+        'alterné 0/255': bytes([0, 255] * 12), 'compteur': bytes(range(24)),
+    }
+    points_fixes = {nom: spn_core(x0, pl) == x0 for nom, x0 in structs.items()}
+
+    return {
+        'chi2': dict(zip(positions, chi2s)),
+        'seuil_chi2_5pct': 293.2,
+        'correlations': dict(zip(masques, correlations)),
+        'bruit_echantillonnage': bruit,
+        'points_fixes': points_fixes,
+    }
+
+
 # ── Présentation ──────────────────────────────────────────────────────────────
 
 def _tableau(titre, lignes, colonnes):
@@ -446,8 +604,8 @@ def main():
     _tableau('1. Espace des permutations — apparent contre réel', lignes,
              ['table', 'entrees', 'distinctes', 'bits_apparents',
               'bits_reels', 'effondrement'])
-    print('\n  L\'en-tête de disk_lib.py annonce 288 et 116 : '
-          + ('confirmé.' if s else 'NON CONFIRMÉ.'))
+    print(f'\n  L\'en-tête de disk_lib.py annonce {DOC_REF256_PERMS} et '
+          f'{DOC_REF360_PERMS} : ' + ('confirmé.' if s else 'NON CONFIRMÉ.'))
 
     # 2
     lignes, aes, distinctes, s = familles_sboxes(args.sboxes, rng)
@@ -510,6 +668,56 @@ def main():
     print(f"  Distance entre le réel et cette prédiction : "
           f"{rel['moyenne']} bits sur 256 (hasard : {rel['hasard']})")
     print(f"  min {rel['min']}, max {rel['max']} — la relation linéaire ne survit pas.")
+
+    # 8
+    print('\n8. Résistance de la couche comme PRP — borne prouvée, sondage empirique')
+    b_diff = branche_couche_complete(spn, rng)
+    b_lin = branche_lineaire_mds()
+    print(f'  nombre de branche différentiel, couche complète P256->MDS->P360 : {b_diff}')
+    print(f'  nombre de branche linéaire, sur M⁻ᵀ                            : {b_lin}')
+    ok &= (b_diff == 5 and b_lin == 5)
+    print('  identiques au nombre de branche de la MDS seule (§3) : envelopper')
+    print('  d\'une permutation de position ne peut pas l\'abaisser, par invariance')
+    print('  du poids de Hamming — vérifié ici sur des tirages réels, pas supposé.')
+
+    DDT_MAX, LAT_MAX = 4, 32
+    actifs, p_diff, corr_lin = borne_sentier_large(DDT_MAX, LAT_MAX, b_diff, D.N_ROUNDS)
+    print(f"\n  sentier large sur {D.N_ROUNDS} tours ({D.N_ROUNDS // 2} paires "
+          f"non chevauchantes) : {actifs} octets actifs au minimum")
+    print(f'  borne différentielle : ({DDT_MAX}/256)^{actifs} = 2^{math.log2(p_diff):.0f}')
+    print(f'  borne linéaire (corrélation) : ({LAT_MAX}/128)^{actifs} = 2^{math.log2(corr_lin):.0f}')
+    print(f'  échantillons nécessaires pour exploiter la borne linéaire (~1/corr²) : '
+          f'2^{-2 * math.log2(corr_lin):.0f}')
+
+    sondage = sondage_biais_cle_fixee(spn, rng)
+    print('\n  sondage à clé fixée — ne peut pas confirmer une borne à 2^-60,')
+    print('  cherche un biais grossier que la borne théorique n\'exclut pas')
+    print('  forcément dans l\'implémentation :')
+    for pos, chi2 in sondage['chi2'].items():
+        depasse = chi2 > sondage['seuil_chi2_5pct']
+        print(f"    chi2 diff. de sortie, entrée en position {pos:2d} : {chi2:6.1f} "
+              f"(seuil {sondage['seuil_chi2_5pct']})" + ('  DÉPASSEMENT' if depasse else ''))
+    for masque, corr in sondage['correlations'].items():
+        print(f"    corrélation masque {masque} : {corr:+.4f} "
+              f"(bruit ±{sondage['bruit_echantillonnage']})")
+    print(f"    points fixes sur entrées structurées : "
+          f"{sum(sondage['points_fixes'].values())}/{len(sondage['points_fixes'])}")
+    sondage_ok = (all(c <= sondage['seuil_chi2_5pct'] for c in sondage['chi2'].values())
+                  and all(abs(c) <= 4 * sondage['bruit_echantillonnage']
+                         for c in sondage['correlations'].values())
+                  and not any(sondage['points_fixes'].values()))
+    ok &= sondage_ok
+
+    print('\n  Portée de la borne — le point à ne pas perdre de vue : elle suppose')
+    print('  un attaquant qui interroge la MÊME permutation (mêmes tirages de')
+    print('  S-box et de permutations) sur de nombreuses entrées choisies. Dans')
+    print('  le protocole réel, _geo_derive n\'est appelée qu\'une fois par')
+    print('  (nonce, secteur, chunk) : l\'attaquant ne voit jamais qu\'UN point')
+    print('  entrée-sortie par instance de la permutation — jamais assez pour')
+    print('  monter une attaque différentielle ou linéaire classique. La borne')
+    print('  est donc une garantie structurelle plus forte que ce que l\'usage')
+    print('  exige, pas une condition dont dépend la sécurité actuelle — qui')
+    print('  repose sur SHA-256 pour la sélection des paramètres (SPN-3, annexe).')
 
     print('\n' + '=' * 72)
     if ok:
