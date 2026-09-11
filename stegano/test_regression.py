@@ -24,7 +24,7 @@ B, D, E sont inchangées dans leur logique, seuls les imports/signatures
 ont été alignés sur stegano_lib.py.
 """
 
-import unittest, os, sys, hashlib, hmac
+import unittest, os, sys, hashlib, hmac, struct
 from unittest.mock import patch
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
@@ -259,11 +259,20 @@ class TestPayloadFormat(unittest.TestCase):
                          "Taille du flux de symboles incohérente avec l'en-tête de longueur")
 
     def test_payload_commitment_present(self):
-        """Les 32 premiers octets de _encrypt() sont le HMAC de key commitment."""
+        """
+        Les 32 premiers octets de _encrypt() sont le HMAC de key commitment.
+
+        LH-4 (audit G. Kerma) : le HMAC porte sur header||inner, où header
+        est l'en-tête de longueur (4 octets, = 32+len(inner)) que
+        payload_to_symbols() calculera pour ce payload — et non plus sur
+        inner seul. Sans cela, la longueur du message n'était pas couverte
+        par le commitment.
+        """
         payload = self._make_payload(MSG_SHORT, KEY_KNOWN)
         commit_recv, inner = payload[:32], payload[32:]
         ck = _commit_key(KEY_KNOWN)
-        commit_calc = hmac.new(ck, inner, hashlib.sha256).digest()
+        header = struct.pack('>I', 32 + len(inner))
+        commit_calc = hmac.new(ck, header + inner, hashlib.sha256).digest()
         self.assertEqual(len(commit_recv), 32,
                          "Key commitment HMAC absent ou tronqué")
         self.assertEqual(commit_recv, commit_calc,

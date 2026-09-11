@@ -104,17 +104,39 @@ def _encrypt(message: str, steg_key: bytes) -> bytes:
     """
     Chiffre avec XChaCha20-Poly1305 + key commitment HMAC-SHA256 [correction 3].
 
-    Format : [32B HMAC(commit_key, inner)][inner]
+    Format : [32B HMAC(commit_key, header||inner)][inner]
       inner = nonce(24) + ciphertext + tag(16)
     La longueur est portée séparément par l'en-tête base-44 de la grille.
 
     Key commitment : ce ciphertext ne peut déchiffrer valablement
     que sous une seule clé — élimine les partitioning oracle attacks.
     """
-    msg_b    = message.upper().encode('ascii', errors='replace')
+    # LH-1 (audit G. Kerma) : refuser un message hors alphabet plutôt que le
+    # mutiler silencieusement. L'ancien errors='replace' remplaçait tout
+    # caractère non-ASCII par '?' sans prévenir l'appelant — un accent oublié
+    # se retrouvait décodé en un message différent du message saisi.
+    msg_upper = message.upper()
+    invalid = [c for c in msg_upper if c not in ALPHABET]
+    if invalid:
+        unique_invalid = sorted(set(invalid))
+        raise ValueError(
+            f"Message contient {len(invalid)} caractère(s) hors alphabet : "
+            f"{unique_invalid!r}. Alphabet accepté : {ALPHABET!r}. "
+            f"Conseil : translittérer les accents (É→E, À→A, etc.) "
+            f"ou retirer la ponctuation non supportée avant l'envoi.")
+    msg_b    = msg_upper.encode('ascii')
     inner    = _xchacha_enc(steg_key, msg_b)
     ck       = _commit_key(steg_key)
-    commit   = _hmac_mod.new(ck, inner, hashlib.sha256).digest()  # 32 bytes
+    # LH-4 (audit G. Kerma) : authentifier l'en-tête de longueur. Le HMAC ne
+    # portait auparavant que sur `inner` ; la longueur totale du payload
+    # (portée séparément, en symboles, par payload_to_symbols()) n'était pas
+    # couverte par le commitment. `header` reproduit exactement l'en-tête que
+    # payload_to_symbols() calculera pour ce payload (4 octets, longueur de
+    # commit+inner) ; _decrypt() le reconstruit depuis le total_len déjà lu
+    # du flux de symboles — aucun changement de format, juste du contenu du
+    # HMAC.
+    header   = struct.pack('>I', 32 + len(inner))
+    commit   = _hmac_mod.new(ck, header + inner, hashlib.sha256).digest()  # 32 bytes
     return commit + inner
 
 def _decrypt(vals: List[int], steg_key: bytes) -> str:
@@ -134,9 +156,13 @@ def _decrypt(vals: List[int], steg_key: bytes) -> str:
     if len(payload) < 32:
         raise ValueError("Payload trop court (key commitment manquant)")
     commit_recv, inner = payload[:32], payload[32:]
-    # Vérifier key commitment avant déchiffrement
+    # Vérifier key commitment avant déchiffrement.
+    # LH-4 : header reconstruit depuis total_len (déjà lu ci-dessus, égal à
+    # len(payload) == 32+len(inner)) — même valeur que celle authentifiée
+    # côté _encrypt(), sans avoir à la transporter une seconde fois.
     ck          = _commit_key(steg_key)
-    commit_calc = _hmac_mod.new(ck, inner, hashlib.sha256).digest()
+    header      = struct.pack('>I', total_len)
+    commit_calc = _hmac_mod.new(ck, header + inner, hashlib.sha256).digest()
     if not _hmac_mod.compare_digest(commit_recv, commit_calc):
         raise ValueError("Key commitment invalide — clé incorrecte ou données altérées")
     try:
