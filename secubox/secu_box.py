@@ -14,8 +14,11 @@ La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
 6. Dissimulation    : géométrie La Livrée d'Hermès
 
 Zones déni plausible (grille 60×60 = 100 blocs 6×6) :
-  Zone A (real)   : blocs zigzag 0..49
-  Zone B (duress) : blocs zigzag 50..99
+  Chaque clé dérive ses blocs depuis son propre steg_key uniquement (fix
+  LH-2 v2, audit G. Kerma, rév. 2) — aucun secret partagé entre les deux
+  côtés, jamais un découpage fixe. Sans la clé réelle, la suite de blocs
+  du message réel n'est pas calculable, même en détenant la clé de
+  contrainte.
   → aucune collision possible entre les deux messages
 """
 
@@ -52,7 +55,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from stegano_lib import (
     load_referents, encode, decode,
-    ALPHA_LEN, zigzag_blocks, apply_orientation,
+    ALPHA_LEN, apply_orientation,
     _encrypt, _decrypt, payload_to_symbols,
 )
 
@@ -277,6 +280,35 @@ def _km_to_keys(km: bytes, ref256: List[Dict], session_id: str,
 
 
 # ── Déni plausible ────────────────────────────────────────────────────────────
+def _derive_block_order(steg_key: bytes, n_blocks: int,
+                         exclude: Optional[set] = None) -> List[int]:
+    """
+    LH-2 v2 (audit G. Kerma, rév. 2) : dérive une suite ordonnée de blocs
+    depuis steg_key UNIQUEMENT — pas de secret partagé entre les deux clés.
+
+    La v1 de ce correctif tirait la partition d'un session_seed commun aux
+    deux jeux de clés : un porteur de la seule clé de contrainte pouvait
+    donc toujours recalculer l'emplacement exact des blocs du message réel
+    (sans pouvoir les déchiffrer). Ici, chaque côté dérive sa propre suite
+    de blocs depuis son propre steg_key ; sans la clé réelle, la suite de
+    blocs réels n'est pas calculable du tout — pas même son existence en
+    tant qu'ensemble précis.
+
+    L'encodeur appelle avec exclude=real_set pour éviter toute collision
+    avec les blocs déjà pris par le message réel ; le décodeur n'a besoin
+    que de sa propre clé et de la suite déjà résolue, stockée dans ses clés.
+    """
+    km = HKDF(hashes.SHA256(), n_blocks * 4,
+              salt=b'deniable-blocks-v2',
+              info=b'block-sequence').derive(steg_key)
+    order = list(range(n_blocks))
+    for i in range(n_blocks - 1, 0, -1):
+        j = int.from_bytes(km[i*4:i*4+4], 'big') % (i + 1)
+        order[i], order[j] = order[j], order[i]
+    if exclude:
+        return [b for b in order if b not in exclude]
+    return order
+
 def encode_deniable(
     real_message:   str,
     duress_message: str,
@@ -284,16 +316,22 @@ def encode_deniable(
     grid_size:      int = 60,
 ) -> Tuple[List[List[int]], Dict, Dict]:
     """
-    Encode deux messages dans deux zones non-chevauchantes.
+    Encode deux messages dans une grille unique (fix LH-2 v2, audit
+    G. Kerma, rév. 2) :
+    • chaque clé dérive ses blocs depuis son propre steg_key uniquement,
+      sans secret partagé entre les deux côtés ;
+    • l'encodeur arbitre les collisions : les blocs réels ont priorité, les
+      blocs de contrainte sautent ceux déjà pris ;
+    • block_sequence, stocké dans chaque jeu de clés, ne révèle que les
+      blocs de CE message — jamais ceux de l'autre.
+
     Retourne (grid, real_keys, duress_keys).
-    Zone real   : blocs zigzag 0..49
-    Zone duress : blocs zigzag 50..99
     """
     N = grid_size; B = N // 6
-    n_half = (B * B) // 2
-    order  = zigzag_blocks(B)
-    grid   = [[secrets.randbelow(ALPHA_LEN) for _ in range(N)]
-               for _ in range(N)]
+    n_blocks = B * B
+    n_half   = n_blocks // 2
+    grid = [[secrets.randbelow(ALPHA_LEN) for _ in range(N)]
+             for _ in range(N)]
 
     def gen_keys(n: int) -> Tuple:
         return (
@@ -308,15 +346,20 @@ def encode_deniable(
     rsk, rkb, rkc, rk2 = gen_keys(n_half)
     dsk, dkb, dkc, dk2 = gen_keys(n_half)
 
-    def place(msg: str, sk, kb, kc, k2, start: int):
+    real_order   = _derive_block_order(rsk, n_blocks)[:n_half]
+    real_set     = set(real_order)
+    duress_order = _derive_block_order(dsk, n_blocks, exclude=real_set)[:n_half]
+
+    def place(msg: str, sk, kb, kc, k2, block_indices):
         payload = _encrypt(msg, sk)
         # Même flux de symboles base-44 que stegano_lib.encode() : les
         # nibbles [0..15] trahissaient les cellules message dans un bruit
         # couvrant [0..43].
         nibbles = payload_to_symbols(payload)
-        ni = 0; blk = 0; pi = start
-        while blk < len(kb) and ni < len(nibbles) and pi < len(order):
-            br, bc = order[pi]
+        ni = 0; blk = 0
+        while blk < len(kb) and ni < len(nibbles):
+            idx    = block_indices[blk]
+            br, bc = idx // B, idx % B
             fk     = k2[blk]
             form   = ref256[fk['form_id'] % len(ref256)]
             base   = form[fk.get('color', 'blue')]
@@ -325,42 +368,43 @@ def encode_deniable(
                 gr, gc = br*6+r, bc*6+c
                 if 0 <= gr < N and 0 <= gc < N:
                     grid[gr][gc] = nibbles[ni]; ni += 1
-            pi += 1; blk += 1
+            blk += 1
 
-    place(real_message,   rsk, rkb, rkc, rk2, start=0)
-    place(duress_message, dsk, dkb, dkc, dk2, start=n_half)
+    place(real_message,   rsk, rkb, rkc, rk2, real_order)
+    place(duress_message, dsk, dkb, dkc, dk2, duress_order)
 
-    real_keys   = {'steg_key': rsk, 'key_b': rkb, 'key_c': rkc,
-                   'key_2': rk2,   'zone_start': 0}
-    duress_keys = {'steg_key': dsk, 'key_b': dkb, 'key_c': dkc,
-                   'key_2': dk2,   'zone_start': n_half}
+    real_keys   = {'steg_key': rsk, 'key_b': rkb, 'key_c': rkc, 'key_2': rk2,
+                   'block_sequence': real_order}
+    duress_keys = {'steg_key': dsk, 'key_b': dkb, 'key_c': dkc, 'key_2': dk2,
+                   'block_sequence': duress_order}
     return grid, real_keys, duress_keys
 
 
 def decode_deniable(grid: List[List[int]], keys: Dict,
                     ref256: List[Dict], grid_size: int = 60) -> str:
     """
-    Décode un message depuis la zone désignée par keys['zone_start'].
-    Clé réelle → message réel. Clé contrainte → faux message.
+    Décode un message depuis la grille (fix LH-2 v2). Le décodeur n'utilise
+    que son steg_key et son block_sequence — aucun secret partagé, aucun
+    lien calculable vers l'autre message.
     """
     N = grid_size; B = N // 6
-    order = zigzag_blocks(B)
-    sk    = keys['steg_key']
-    kb    = keys['key_b']
-    kc    = keys['key_c']
-    k2    = keys['key_2']
-    start = keys.get('zone_start', 0)
-    vals  = []
-    blk = 0; pi = start
-    while blk < len(kb) and pi < len(order):
-        br, bc = order[pi]
+    sk             = keys['steg_key']
+    kb             = keys['key_b']
+    kc             = keys['key_c']
+    k2             = keys['key_2']
+    block_sequence = keys['block_sequence']
+
+    vals = []; blk = 0
+    while blk < len(kb):
+        idx    = block_sequence[blk]
+        br, bc = idx // B, idx % B
         fk     = k2[blk]
         form   = ref256[fk['form_id'] % len(ref256)]
         base   = form[fk.get('color', 'blue')]
         for r, c in apply_orientation(base, kc[blk][0]):
             gr, gc = br*6+r, bc*6+c
             if 0 <= gr < N and 0 <= gc < N: vals.append(grid[gr][gc])
-        pi += 1; blk += 1
+        blk += 1
     return _decrypt(vals, sk)
 
 
@@ -428,9 +472,8 @@ def demo():
     duress_out = decode_deniable(grid_d, dk, ref256)
     print(f"   Clé réelle     → '{real_out}' ✓")
     print(f"   Clé contrainte → '{duress_out}' ✓")
-    print(f"   Zone A (blocs 0..49)  : message réel")
-    print(f"   Zone B (blocs 50..99) : faux message")
-    print(f"   Propriété : impossible de prouver lequel est réel sans les deux clés")
+    print(f"   Chaque clé dérive ses blocs depuis son propre steg_key (fix LH-2 v2)")
+    print(f"   Propriété : aucun secret partagé, blocs réels non calculables sans la clé réelle")
 
     print("\n7. IDENTITÉ EXPORTÉE\n")
     exported  = alice.export_private("passphrase_test")
@@ -512,3 +555,70 @@ def decode_carter_mix_session(grid: List[List[int]], session_keys: Dict,
                                 ref360: Optional[List[Dict]] = None) -> str:
     from stegano_lib import decode_carter_mix
     return decode_carter_mix(grid, session_keys['steg_key'], ref256, ref360)
+
+
+# ── Mode Carter Random v3 dans SecuBox ──────────────────────────────────────────
+# Variante de la section « Mode Carter » ci-dessus : au lieu de la grille
+# Carter à Référent 256/360 fixe, la grammaire dérive ses PROPRES référents
+# (10 seeds, 256 formes générées dynamiquement chacun). Aucun fichier JSON de
+# référent n'est nécessaire. Fonctions additives — n'affectent pas
+# encode_carter_session/decode_carter_session/carter_deniable ci-dessus, qui
+# restent la voie Carter à référent fixe.
+
+def encode_carter_random_session(message: str, session_keys: Dict) -> Tuple:
+    """
+    Encode un message en mode Carter Random v3 depuis une session X25519.
+    Utilise steg_key comme master_key de la grammaire (référents dérivés,
+    pas de referent_256.json requis).
+
+    session_keys : résultat de Session.derive()
+    Retourne     : (grille 90×90, métadonnées de capacité)
+    """
+    from carter_random import encode_carter_random
+    return encode_carter_random(message, session_keys['steg_key'])
+
+def decode_carter_random_session(grid: List[List[int]], session_keys: Dict) -> str:
+    """Décode une grille Carter Random v3 depuis les clés de session."""
+    from carter_random import decode_carter_random
+    return decode_carter_random(grid, session_keys['steg_key'])
+
+def encode_carter_random_session_360(message: str, session_keys: Dict) -> Tuple:
+    """Carter Random v3 sur grille 180×180 depuis une session X25519."""
+    from carter_random import encode_carter_random_360
+    return encode_carter_random_360(message, session_keys['steg_key'])
+
+def decode_carter_random_session_360(grid: List[List[int]], session_keys: Dict) -> str:
+    """Décode une grille Carter Random v3 180×180 depuis les clés de session."""
+    from carter_random import decode_carter_random_360
+    return decode_carter_random_360(grid, session_keys['steg_key'])
+
+def carter_random_deniable(
+    real_message:   str,
+    real_key:       bytes,
+    duress_message: str,
+    duress_key:     bytes,
+) -> tuple:
+    """
+    Déni plausible Carter Random v3 : deux grilles 90×90 indépendantes, une
+    par clé, chacune avec sa propre grammaire et ses propres référents
+    dérivés. Aucun observateur ne peut prouver laquelle est réelle.
+
+    Retourne (grid_real, grid_duress) — chaque élément est le couple
+    (grille, métadonnées) renvoyé par encode_carter_random().
+    """
+    from carter_random import encode_carter_random
+    grid_real   = encode_carter_random(real_message,   real_key)
+    grid_duress = encode_carter_random(duress_message, duress_key)
+    return grid_real, grid_duress
+
+def carter_random_deniable_360(
+    real_message:   str,
+    real_key:       bytes,
+    duress_message: str,
+    duress_key:     bytes,
+) -> tuple:
+    """Variante 180×180 de carter_random_deniable()."""
+    from carter_random import encode_carter_random_360
+    grid_real   = encode_carter_random_360(real_message,   real_key)
+    grid_duress = encode_carter_random_360(duress_message, duress_key)
+    return grid_real, grid_duress
