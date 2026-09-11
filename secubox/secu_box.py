@@ -14,8 +14,10 @@ La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
 6. Dissimulation    : géométrie La Livrée d'Hermès
 
 Zones déni plausible (grille 60×60 = 100 blocs 6×6) :
-  Zone A (real)   : blocs zigzag 0..49
-  Zone B (duress) : blocs zigzag 50..99
+  La partition entre zone réelle et zone de contrainte est tirée d'une
+  permutation de session aléatoire (fix LH-2, audit G. Kerma) — jamais un
+  découpage fixe. Sans le session_seed transmis dans les clés, la frontière
+  entre les deux zones n'est pas calculable depuis la seule grille.
   → aucune collision possible entre les deux messages
 """
 
@@ -52,7 +54,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from stegano_lib import (
     load_referents, encode, decode,
-    ALPHA_LEN, zigzag_blocks, apply_orientation,
+    ALPHA_LEN, apply_orientation,
     _encrypt, _decrypt, payload_to_symbols,
 )
 
@@ -277,6 +279,28 @@ def _km_to_keys(km: bytes, ref256: List[Dict], session_id: str,
 
 
 # ── Déni plausible ────────────────────────────────────────────────────────────
+def _deniable_partition(session_seed: bytes, n_blocks: int, B: int) -> List[Tuple[int, int]]:
+    """
+    Fix LH-2 (audit G. Kerma) : dérive une permutation des n_blocks blocs
+    depuis session_seed via HKDF + Fisher-Yates.
+
+    Avant ce correctif, la frontière entre zone réelle et zone de contrainte
+    était un découpage fixe (blocs zigzag 0..49 / 50..99) : un observateur
+    qui ne détient AUCUNE des deux clés la connaît déjà, par la seule
+    construction publique de la grille. session_seed rend cette frontière
+    non calculable sans lui ; il est transmis dans les deux jeux de clés,
+    donc un porteur légitime (réel ou contrainte) peut toujours la
+    reconstruire.
+    """
+    km = HKDF(hashes.SHA256(), n_blocks * 4,
+              salt=b'deniable-session-v2',
+              info=b'block-partition').derive(session_seed)
+    perm = list(range(n_blocks))
+    for i in range(n_blocks - 1, 0, -1):
+        j = int.from_bytes(km[i*4:i*4+4], 'big') % (i + 1)
+        perm[i], perm[j] = perm[j], perm[i]
+    return [(idx // B, idx % B) for idx in perm]
+
 def encode_deniable(
     real_message:   str,
     duress_message: str,
@@ -284,16 +308,21 @@ def encode_deniable(
     grid_size:      int = 60,
 ) -> Tuple[List[List[int]], Dict, Dict]:
     """
-    Encode deux messages dans deux zones non-chevauchantes.
+    Encode deux messages dans une grille unique, en deux zones non-
+    chevauchantes dont la partition est tirée d'une permutation de session
+    aléatoire (fix LH-2, audit G. Kerma) plutôt que d'un découpage fixe.
     Retourne (grid, real_keys, duress_keys).
-    Zone real   : blocs zigzag 0..49
-    Zone duress : blocs zigzag 50..99
     """
     N = grid_size; B = N // 6
-    n_half = (B * B) // 2
-    order  = zigzag_blocks(B)
-    grid   = [[secrets.randbelow(ALPHA_LEN) for _ in range(N)]
-               for _ in range(N)]
+    n_blocks = B * B
+    n_half   = n_blocks // 2
+    grid = [[secrets.randbelow(ALPHA_LEN) for _ in range(N)]
+             for _ in range(N)]
+
+    session_seed  = secrets.token_bytes(16)
+    partition     = _deniable_partition(session_seed, n_blocks, B)
+    real_blocks   = partition[:n_half]
+    duress_blocks = partition[n_half:]
 
     def gen_keys(n: int) -> Tuple:
         return (
@@ -308,15 +337,15 @@ def encode_deniable(
     rsk, rkb, rkc, rk2 = gen_keys(n_half)
     dsk, dkb, dkc, dk2 = gen_keys(n_half)
 
-    def place(msg: str, sk, kb, kc, k2, start: int):
+    def place(msg: str, sk, kb, kc, k2, block_list):
         payload = _encrypt(msg, sk)
         # Même flux de symboles base-44 que stegano_lib.encode() : les
         # nibbles [0..15] trahissaient les cellules message dans un bruit
         # couvrant [0..43].
         nibbles = payload_to_symbols(payload)
-        ni = 0; blk = 0; pi = start
-        while blk < len(kb) and ni < len(nibbles) and pi < len(order):
-            br, bc = order[pi]
+        ni = 0; blk = 0
+        while blk < len(kb) and ni < len(nibbles):
+            br, bc = block_list[blk]
             fk     = k2[blk]
             form   = ref256[fk['form_id'] % len(ref256)]
             base   = form[fk.get('color', 'blue')]
@@ -325,42 +354,48 @@ def encode_deniable(
                 gr, gc = br*6+r, bc*6+c
                 if 0 <= gr < N and 0 <= gc < N:
                     grid[gr][gc] = nibbles[ni]; ni += 1
-            pi += 1; blk += 1
+            blk += 1
 
-    place(real_message,   rsk, rkb, rkc, rk2, start=0)
-    place(duress_message, dsk, dkb, dkc, dk2, start=n_half)
+    place(real_message,   rsk, rkb, rkc, rk2, real_blocks)
+    place(duress_message, dsk, dkb, dkc, dk2, duress_blocks)
 
-    real_keys   = {'steg_key': rsk, 'key_b': rkb, 'key_c': rkc,
-                   'key_2': rk2,   'zone_start': 0}
-    duress_keys = {'steg_key': dsk, 'key_b': dkb, 'key_c': dkc,
-                   'key_2': dk2,   'zone_start': n_half}
+    real_keys   = {'steg_key': rsk, 'key_b': rkb, 'key_c': rkc, 'key_2': rk2,
+                   'session_seed': session_seed, 'zone': 'real'}
+    duress_keys = {'steg_key': dsk, 'key_b': dkb, 'key_c': dkc, 'key_2': dk2,
+                   'session_seed': session_seed, 'zone': 'duress'}
     return grid, real_keys, duress_keys
 
 
 def decode_deniable(grid: List[List[int]], keys: Dict,
                     ref256: List[Dict], grid_size: int = 60) -> str:
     """
-    Décode un message depuis la zone désignée par keys['zone_start'].
-    Clé réelle → message réel. Clé contrainte → faux message.
+    Décode un message en reconstruisant la partition de session depuis
+    keys['session_seed'] (fix LH-2). Clé réelle → message réel.
+    Clé contrainte → faux message.
     """
     N = grid_size; B = N // 6
-    order = zigzag_blocks(B)
-    sk    = keys['steg_key']
-    kb    = keys['key_b']
-    kc    = keys['key_c']
-    k2    = keys['key_2']
-    start = keys.get('zone_start', 0)
-    vals  = []
-    blk = 0; pi = start
-    while blk < len(kb) and pi < len(order):
-        br, bc = order[pi]
+    n_blocks = B * B
+    n_half   = n_blocks // 2
+    sk           = keys['steg_key']
+    kb           = keys['key_b']
+    kc           = keys['key_c']
+    k2           = keys['key_2']
+    session_seed = keys['session_seed']
+    zone         = keys.get('zone', 'real')
+
+    partition  = _deniable_partition(session_seed, n_blocks, B)
+    block_list = partition[:n_half] if zone == 'real' else partition[n_half:]
+
+    vals = []; blk = 0
+    while blk < len(kb):
+        br, bc = block_list[blk]
         fk     = k2[blk]
         form   = ref256[fk['form_id'] % len(ref256)]
         base   = form[fk.get('color', 'blue')]
         for r, c in apply_orientation(base, kc[blk][0]):
             gr, gc = br*6+r, bc*6+c
             if 0 <= gr < N and 0 <= gc < N: vals.append(grid[gr][gc])
-        pi += 1; blk += 1
+        blk += 1
     return _decrypt(vals, sk)
 
 
@@ -428,9 +463,8 @@ def demo():
     duress_out = decode_deniable(grid_d, dk, ref256)
     print(f"   Clé réelle     → '{real_out}' ✓")
     print(f"   Clé contrainte → '{duress_out}' ✓")
-    print(f"   Zone A (blocs 0..49)  : message réel")
-    print(f"   Zone B (blocs 50..99) : faux message")
-    print(f"   Propriété : impossible de prouver lequel est réel sans les deux clés")
+    print(f"   Partition des 100 blocs tirée d'un session_seed aléatoire (fix LH-2)")
+    print(f"   Propriété : sans lui, la frontière entre les deux zones n'est pas calculable")
 
     print("\n7. IDENTITÉ EXPORTÉE\n")
     exported  = alice.export_private("passphrase_test")
