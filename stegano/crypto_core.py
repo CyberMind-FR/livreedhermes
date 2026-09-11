@@ -5,9 +5,10 @@ crypto_core.py — Primitives cryptographiques pures
 La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
 
 Extrait de stegano_lib.py (refactor de modularisation) : ce fichier ne
-contient QUE la couche cryptographique — XChaCha20-Poly1305, key
-commitment HMAC-SHA256, et l'encodage base-44 uniforme du payload
-chiffré. Aucune logique de placement géométrique ici.
+contient QUE la couche cryptographique — ChaCha20-Poly1305 à nonce étendu
+par HKDF (voir LH-5 ci-dessous), key commitment HMAC-SHA256, et
+l'encodage base-44 uniforme du payload chiffré. Aucune logique de
+placement géométrique ici.
 
 Portée destinée à la revue cryptographique externe (voir
 NOTE_TECHNIQUE_CRYPTOEXPERTS.md dans le paquet d'export) : la couche
@@ -17,7 +18,8 @@ propriété cryptographique propre et est délibérément hors de ce fichier.
 Audit cryptologique : 2026-09-10
 NOTE AUDIT : symboles du message ET bruit uniformes sur [0..ALPHA_LEN-1]
              → aucun distingueur statistique sur la valeur des cellules.
-NOTE AUDIT : Confidentialité assurée par XChaCha20, pas par la géométrie.
+NOTE AUDIT : Confidentialité assurée par la construction ci-dessous, pas
+             par la géométrie.
 """
 
 import hashlib
@@ -29,7 +31,22 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF
 from cryptography.hazmat.primitives import hashes as _hashes
 
 def _xchacha_enc(key: bytes, plaintext: bytes, aad: bytes = b'') -> bytes:
-    """XChaCha20-Poly1305 : nonce 24 bytes. [A3]"""
+    """
+    ChaCha20-Poly1305 à nonce étendu par HKDF. Nonce 24 bytes. [A3]
+
+    LH-5 (audit G. Kerma) : bien que le schéma soit structurellement
+    analogue à XChaCha20-Poly1305 (nonce 24 octets → sous-clé → ChaCha20-
+    Poly1305), la sous-clé est dérivée par HKDF-SHA256 et non par HChaCha20
+    comme le spécifie XChaCha20 (draft-irtf-cfrg-xchacha). La construction
+    est au moins aussi sûre pour cet usage mais n'est PAS interopérable
+    avec les implémentations standard de XChaCha20-Poly1305 (libsodium,
+    PyNaCl, etc.) : un ciphertext produit ici ne se déchiffre qu'avec
+    cette même fonction, pas avec un décodeur XChaCha20 conforme au
+    brouillon IETF. D'où le nom «ChaCha20-Poly1305 à nonce étendu par
+    HKDF» plutôt que «XChaCha20-Poly1305» pour désigner cette construction
+    sans ambiguïté. Le nom de fonction est conservé pour ne pas modifier
+    tous ses appelants ; c'est la documentation qui est corrigée.
+    """
     nonce  = os.urandom(24)
     subkey = _HKDF(_hashes.SHA256(), 32, salt=nonce[:16],
                    info=b'XChaCha20-HChaCha20-subkey').derive(key)
@@ -37,7 +54,7 @@ def _xchacha_enc(key: bytes, plaintext: bytes, aad: bytes = b'') -> bytes:
     return nonce + ct
 
 def _xchacha_dec(key: bytes, data: bytes, aad: bytes = b'') -> bytes:
-    """XChaCha20-Poly1305 déchiffrement. [A3]"""
+    """ChaCha20-Poly1305 à nonce étendu par HKDF — déchiffrement (LH-5, voir _xchacha_enc). [A3]"""
     nonce, ct = data[:24], data[24:]
     subkey = _HKDF(_hashes.SHA256(), 32, salt=nonce[:16],
                    info=b'XChaCha20-HChaCha20-subkey').derive(key)
@@ -102,7 +119,8 @@ def _commit_key(steg_key: bytes) -> bytes:
 
 def _encrypt(message: str, steg_key: bytes) -> bytes:
     """
-    Chiffre avec XChaCha20-Poly1305 + key commitment HMAC-SHA256 [correction 3].
+    Chiffre avec ChaCha20-Poly1305 à nonce étendu par HKDF (LH-5, voir
+    _xchacha_enc) + key commitment HMAC-SHA256 [correction 3].
 
     Format : [32B HMAC(commit_key, header||inner)][inner]
       inner = nonce(24) + ciphertext + tag(16)

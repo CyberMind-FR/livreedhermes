@@ -60,6 +60,14 @@ CONC_ORDER = [
 # masquer chaque symbole rend les cellules message indiscernables du bruit
 # même si la géométrie des référents générés dynamiquement produit une
 # distribution de positions moins régulière que le Référent 256 fixe.
+#
+# CR-3 (audit G. Kerma) : les valeurs sont déjà uniformes par construction
+# (payload chiffré + alphabet 44 valeurs, encodage base-44 avec rembourrage
+# aléatoire — voir crypto_core.payload_to_symbols). Ce masque additif
+# n'apporte donc pas d'uniformité supplémentaire : il est conservé comme
+# marge défensive (variation de position indépendante de payload_to_symbols),
+# mais son rôle doit rester documenté comme tel, pas présenté comme la
+# source de l'indiscernabilité.
 
 def _derive_masks(grammar_key: bytes, n: int) -> list:
     """
