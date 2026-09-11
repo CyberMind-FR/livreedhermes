@@ -55,6 +55,8 @@ def _xchacha_enc(key: bytes, plaintext: bytes, aad: bytes = b'') -> bytes:
 
 def _xchacha_dec(key: bytes, data: bytes, aad: bytes = b'') -> bytes:
     """ChaCha20-Poly1305 à nonce étendu par HKDF — déchiffrement (LH-5, voir _xchacha_enc). [A3]"""
+    if len(data) < 24 + 16:
+        raise ValueError(f"Ciphertext trop court : {len(data)} octets, minimum 40 requis")
     nonce, ct = data[:24], data[24:]
     subkey = _HKDF(_hashes.SHA256(), 32, salt=nonce[:16],
                    info=b'XChaCha20-HChaCha20-subkey').derive(key)
@@ -187,7 +189,12 @@ def _decrypt(vals: List[int], steg_key: bytes) -> str:
         pt = _xchacha_dec(steg_key, inner)
     except Exception:
         raise ValueError("Tag Poly1305 invalide — clé incorrecte ou données altérées")
-    return pt.decode('ascii', errors='replace')
+    try:
+        return pt.decode('ascii', errors='strict')
+    except UnicodeDecodeError:
+        raise ValueError(
+            "Texte déchiffré non-ASCII — données corrompues malgré une "
+            "authentification AEAD valide")
 
 # ── Flux de symboles — API pour carter.py et grid_90.py ──────────────────────
 # Ces modules construisent leur propre flux et appellent _decrypt() dessus.
