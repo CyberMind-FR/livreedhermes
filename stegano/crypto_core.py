@@ -30,22 +30,22 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF
 from cryptography.hazmat.primitives import hashes as _hashes
 
-def _xchacha_enc(key: bytes, plaintext: bytes, aad: bytes = b'') -> bytes:
+def _chacha20_hkdf_enc(key: bytes, plaintext: bytes, aad: bytes = b'') -> bytes:
     """
     ChaCha20-Poly1305 à nonce étendu par HKDF. Nonce 24 bytes. [A3]
 
-    LH-5 (audit G. Kerma) : bien que le schéma soit structurellement
-    analogue à XChaCha20-Poly1305 (nonce 24 octets → sous-clé → ChaCha20-
-    Poly1305), la sous-clé est dérivée par HKDF-SHA256 et non par HChaCha20
-    comme le spécifie XChaCha20 (draft-irtf-cfrg-xchacha). La construction
-    est au moins aussi sûre pour cet usage mais n'est PAS interopérable
-    avec les implémentations standard de XChaCha20-Poly1305 (libsodium,
-    PyNaCl, etc.) : un ciphertext produit ici ne se déchiffre qu'avec
-    cette même fonction, pas avec un décodeur XChaCha20 conforme au
-    brouillon IETF. D'où le nom «ChaCha20-Poly1305 à nonce étendu par
-    HKDF» plutôt que «XChaCha20-Poly1305» pour désigner cette construction
-    sans ambiguïté. Le nom de fonction est conservé pour ne pas modifier
-    tous ses appelants ; c'est la documentation qui est corrigée.
+    LH-5 (audit G. Kerma) : renommée depuis _xchacha_enc. Bien que le
+    schéma soit structurellement analogue à XChaCha20-Poly1305 (nonce 24
+    octets → sous-clé → ChaCha20-Poly1305), la sous-clé est dérivée par
+    HKDF-SHA256 et non par HChaCha20 comme le spécifie XChaCha20
+    (draft-irtf-cfrg-xchacha). La construction est au moins aussi sûre
+    pour cet usage mais n'est PAS interopérable avec les implémentations
+    standard de XChaCha20-Poly1305 (libsodium, PyNaCl, etc.) : un
+    ciphertext produit ici ne se déchiffre qu'avec cette même fonction,
+    pas avec un décodeur XChaCha20 conforme au brouillon IETF. D'où le
+    nom «ChaCha20-Poly1305 à nonce étendu par HKDF» — et l'identifiant
+    _chacha20_hkdf_enc — plutôt que «XChaCha20-Poly1305» pour désigner
+    cette construction sans ambiguïté, dans le code comme dans la doc.
     """
     nonce  = os.urandom(24)
     subkey = _HKDF(_hashes.SHA256(), 32, salt=nonce[:16],
@@ -53,8 +53,8 @@ def _xchacha_enc(key: bytes, plaintext: bytes, aad: bytes = b'') -> bytes:
     ct = ChaCha20Poly1305(subkey).encrypt(b'\x00'*4 + nonce[16:], plaintext, aad or None)
     return nonce + ct
 
-def _xchacha_dec(key: bytes, data: bytes, aad: bytes = b'') -> bytes:
-    """ChaCha20-Poly1305 à nonce étendu par HKDF — déchiffrement (LH-5, voir _xchacha_enc). [A3]"""
+def _chacha20_hkdf_dec(key: bytes, data: bytes, aad: bytes = b'') -> bytes:
+    """ChaCha20-Poly1305 à nonce étendu par HKDF — déchiffrement (LH-5, voir _chacha20_hkdf_enc ; renommée depuis _xchacha_dec). [A3]"""
     if len(data) < 24 + 16:
         raise ValueError(f"Ciphertext trop court : {len(data)} octets, minimum 40 requis")
     nonce, ct = data[:24], data[24:]
@@ -64,7 +64,7 @@ def _xchacha_dec(key: bytes, data: bytes, aad: bytes = b'') -> bytes:
 
 ALPHABET  = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?-'
 ALPHA_LEN = len(ALPHABET)   # 44
-_AEAD_OVERHEAD = 32 + 24 + 16   # commitment HMAC + nonce XChaCha20 + tag Poly1305
+_AEAD_OVERHEAD = 32 + 24 + 16   # commitment HMAC + nonce ChaCha20-HKDF + tag Poly1305
 _MAX_PAYLOAD   = 1 << 24        # garde-fou en-tête (16 Mio)
 
 # ── Encodage base-44 ─────────────────────────────────────────────────────────
@@ -111,10 +111,10 @@ def _syms_to_bytes(syms: List[int], nbytes: int) -> bytes:
         u = u * ALPHA_LEN + d
     return (u & ((1 << (8*nbytes)) - 1)).to_bytes(nbytes, 'big')
 
-# ── Chiffrement du message — Key commitment + XChaCha20 ──────────────────────
+# ── Chiffrement du message — Key commitment + ChaCha20-HKDF ──────────────────
 
 def _commit_key(steg_key: bytes) -> bytes:
-    """Clé HMAC dédiée au key commitment (séparée de la clé XChaCha20)."""
+    """Clé HMAC dédiée au key commitment (séparée de la clé de chiffrement)."""
     return _HKDF(_hashes.SHA256(), 32,
                   salt=b'commit-v1',
                   info=b'key-commitment').derive(steg_key)
@@ -122,7 +122,7 @@ def _commit_key(steg_key: bytes) -> bytes:
 def _encrypt(message: str, steg_key: bytes) -> bytes:
     """
     Chiffre avec ChaCha20-Poly1305 à nonce étendu par HKDF (LH-5, voir
-    _xchacha_enc) + key commitment HMAC-SHA256 [correction 3].
+    _chacha20_hkdf_enc) + key commitment HMAC-SHA256 [correction 3].
 
     Format : [32B HMAC(commit_key, header||inner)][inner]
       inner = nonce(24) + ciphertext + tag(16)
@@ -145,7 +145,7 @@ def _encrypt(message: str, steg_key: bytes) -> bytes:
             f"Conseil : translittérer les accents (É→E, À→A, etc.) "
             f"ou retirer la ponctuation non supportée avant l'envoi.")
     msg_b    = msg_upper.encode('ascii')
-    inner    = _xchacha_enc(steg_key, msg_b)
+    inner    = _chacha20_hkdf_enc(steg_key, msg_b)
     ck       = _commit_key(steg_key)
     # LH-4 (audit G. Kerma) : authentifier l'en-tête de longueur. Le HMAC ne
     # portait auparavant que sur `inner` ; la longueur totale du payload
@@ -186,7 +186,7 @@ def _decrypt(vals: List[int], steg_key: bytes) -> str:
     if not _hmac_mod.compare_digest(commit_recv, commit_calc):
         raise ValueError("Key commitment invalide — clé incorrecte ou données altérées")
     try:
-        pt = _xchacha_dec(steg_key, inner)
+        pt = _chacha20_hkdf_dec(steg_key, inner)
     except Exception:
         raise ValueError("Tag Poly1305 invalide — clé incorrecte ou données altérées")
     try:

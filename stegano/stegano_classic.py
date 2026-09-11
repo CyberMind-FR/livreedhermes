@@ -11,7 +11,7 @@ grammaire Carter (voir carter.py). La couche cryptographique est dans
 crypto_core.py.
 
 ARCHITECTURE :
-  Couche 1 — XChaCha20-Poly1305 : message chiffré AVANT dissimulation.
+  Couche 1 — ChaCha20-Poly1305 à nonce étendu par HKDF (LH-5) : message chiffré AVANT dissimulation.
   Couche 2 — Dissimulation géométrique : chiffré placé aux positions
              définies par les clés B, C, 2.
 
@@ -177,12 +177,12 @@ def make_keys(msg_len: int, ref256: List[Dict],
 def compute_keyspace(key_b: List[int], ref256: List[Dict]) -> Dict:
     n_blocks = len(key_b); n_sub = sum(k**2 for k in key_b)
     return {
-        'steg_key'    : '256 bits (XChaCha20)',
+        'steg_key'    : '256 bits (ChaCha20-HKDF)',
         'key_B_bits'  : round(math.log2(4)*n_blocks),
         'key_C_bits'  : round(math.log2(8)*n_sub),
         'key_2_bits'  : round(math.log2(len(ref256)*2)*n_blocks),
         'key_A'       : 'Retirée — redondante avec Clé 2 (audit 2026-09-10)',
-        'note'        : 'Confidentialité = XChaCha20 (256 bits effectifs)',
+        'note'        : 'Confidentialité = ChaCha20-HKDF (256 bits effectifs)',
     }
 
 def grid_to_csv(g): return '\n'.join(','.join(str(v) for v in r) for r in g)

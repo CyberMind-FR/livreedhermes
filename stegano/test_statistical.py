@@ -18,9 +18,10 @@ Methode Avalanche : os.urandom fixe pour isoler l'effet de la cle.
 La grammaire Carter change => blocs reasignes => effets en cascade.
 
 Adapte de la suite soumise en revue cryptographique externe pour coller a
-l'API reelle de stegano_lib.py / carter_random.py : il n'existe pas de
-module crypto_core.py separe dans ce depot (_xchacha_enc et _encrypt
-vivent dans stegano_lib.py), et il n'existe pas de helper "un octet -> N
+l'API reelle de stegano_lib.py / carter_random.py. _chacha20_hkdf_enc
+(LH-5 ; anciennement _xchacha_enc, renomme car ce n'est pas du XChaCha20
+standard) et _encrypt vivent dans crypto_core.py, re-exportes par
+stegano_lib.py. Il n'existe pas de helper "un octet -> N
 symboles" isole (_byte_to_syms) : le flux de symboles d'un message se
 produit avec payload_to_symbols(), la meme fonction que les encodeurs
 Carter utilisent en production - c'est elle qui remplace l'ancienne
@@ -40,7 +41,7 @@ from stegano_lib import (
     load_referents, _load_ref360,
     encode_carter, decode_carter,
     encode_carter_360, encode_carter_mix,
-    _encrypt, _xchacha_enc, payload_to_symbols, ALPHA_LEN,
+    _encrypt, _chacha20_hkdf_enc, payload_to_symbols, ALPHA_LEN,
 )
 
 from carter_random import (
@@ -145,16 +146,17 @@ class TestAvalancheKey(unittest.TestCase):
         print(f"  Avalanche Carter grille : mean={mean:.3f} ")
         print(f"  (attendu >80% : grammaire HKDF + chiffrement changent ensemble)")
 
-    def test_avalanche_xchacha20_key_sensitivity(self):
+    def test_avalanche_chacha20_hkdf_key_sensitivity(self):
         """
-        XChaCha20 key sensitivity : flip 1 bit de CLE -> ~50% bits ciphertext changent.
+        ChaCha20-HKDF (LH-5 ; pas du XChaCha20 standard) key sensitivity :
+        flip 1 bit de CLE -> ~50% bits ciphertext changent.
         """
         msg = self.MSG.upper().encode('ascii')
         key = os.urandom(32)
-        seed = b'xchacha-key-av'
+        seed = b'chacha20-hkdf-key-av'
         rng1 = _Det(seed)
         with patch('os.urandom', rng1.read):
-            ct1 = _xchacha_enc(key, msg)
+            ct1 = _chacha20_hkdf_enc(key, msg)
         ratios = []
         NONCE = 24
         for bit_pos in range(32):   # 32 premiers bits de la cle
@@ -162,17 +164,17 @@ class TestAvalancheKey(unittest.TestCase):
             key2[bit_pos // 8] ^= (1 << (bit_pos % 8))
             rng2 = _Det(seed)   # meme nonce
             with patch('os.urandom', rng2.read):
-                ct2 = _xchacha_enc(bytes(key2), msg)
+                ct2 = _chacha20_hkdf_enc(bytes(key2), msg)
             c1, c2 = ct1[NONCE:], ct2[NONCE:]
             n = min(len(c1), len(c2)) * 8
             diff = sum(bin(a^b).count('1') for a,b in zip(c1,c2))
             ratios.append(diff / n if n > 0 else 0)
         mean = statistics.mean(ratios)
         self.assertGreater(mean, 0.40,
-            f"XChaCha20 key sensitivity faible : {mean:.3f}")
+            f"ChaCha20-HKDF key sensitivity faible : {mean:.3f}")
         self.assertLess(mean, 0.60,
-            f"XChaCha20 key sensitivity anormale : {mean:.3f}")
-        print(f"  XChaCha20 key sensitivity : mean={mean:.3f} (attendu ~0.50)")
+            f"ChaCha20-HKDF key sensitivity anormale : {mean:.3f}")
+        print(f"  ChaCha20-HKDF key sensitivity : mean={mean:.3f} (attendu ~0.50)")
 
     def test_avalanche_no_zero_bit(self):
         """Aucun flip de bit ne laisse la grille identique."""
@@ -260,8 +262,8 @@ class TestEntropy(unittest.TestCase):
         h = self._test_mode(encode_carter_mix, self.ref256, self.ref360)
         print(f"  Entropie Carter Mix : {h:.4f} bits")
 
-    def test_entropy_xchacha20_output(self):
-        """XChaCha20 seul : entropie sur la sortie brute (bits)."""
+    def test_entropy_chacha20_hkdf_output(self):
+        """_encrypt() (ChaCha20-HKDF + commitment) : entropie sur la sortie brute (bits)."""
         key = os.urandom(32)
         payload = _encrypt(self.MSG * 10, key)   # plus long pour stat
         bits = []
@@ -272,8 +274,8 @@ class TestEntropy(unittest.TestCase):
         p0 = 1 - p1
         h = -(p0 * math.log2(p0) if p0 > 0 else 0) \
             -(p1 * math.log2(p1) if p1 > 0 else 0)
-        self.assertGreater(h, 0.98, f"XChaCha20 entropie bit faible : {h:.4f}")
-        print(f"  Entropie XChaCha20  : {h:.4f} bits/bit (proportion 1s={p1:.4f})")
+        self.assertGreater(h, 0.98, f"ChaCha20-HKDF entropie bit faible : {h:.4f}")
+        print(f"  Entropie ChaCha20-HKDF : {h:.4f} bits/bit (proportion 1s={p1:.4f})")
 
 
 class TestChiSquare(unittest.TestCase):
@@ -558,7 +560,7 @@ class TestCarterRandomAvalanche(unittest.TestCase):
     On mesure a la place :
     1. Grammaire (roles des blocs) : flip 1 bit -> HKDF derive une grammaire
        entierement differente -> >35% des blocs changent de role.
-    2. Cellules message : les symboles chiffres changent a ~97% (XChaCha20).
+    2. Cellules message : les symboles chiffres changent a ~97% (ChaCha20-HKDF).
     """
 
     BITS = 16
@@ -596,7 +598,7 @@ class TestCarterRandomAvalanche(unittest.TestCase):
     def test_message_cell_avalanche(self):
         """
         Avalanche des symboles message : flip 1 bit cle -> >80% des symboles
-        chiffres changent (propriete de XChaCha20 + masques HKDF).
+        chiffres changent (propriete de ChaCha20-HKDF + masques HKDF).
 
         Utilise payload_to_symbols() (le meme flux de symboles que produisent
         les encodeurs Carter en production) plutot qu'une conversion octet
@@ -621,7 +623,7 @@ class TestCarterRandomAvalanche(unittest.TestCase):
         mean = statistics.mean(ratios)
         self.assertGreater(mean, 0.80,
             f"Avalanche symboles message : {mean:.3f} < 0.80")
-        print(f"  Avalanche msg symboles : mean={mean:.3f} (attendu >0.80 — XChaCha20)")
+        print(f"  Avalanche msg symboles : mean={mean:.3f} (attendu >0.80 — ChaCha20-HKDF)")
 
 
 class TestCarterRandomSummary(unittest.TestCase):

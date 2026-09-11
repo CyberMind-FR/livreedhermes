@@ -10,7 +10,7 @@ La Livrée d'Hermès — Anibal Edelberto Amiot (2026)
                       fingerprint vérifié hors bande écarte un relais actif
 3. Forward secrecy  : clé éphémère détruite après derive()
 4. Déni plausible   : 2 messages dans 2 zones non-chevauchantes d'une grille
-5. Chiffrement      : XChaCha20-Poly1305 (stegano_lib.py)
+5. Chiffrement      : ChaCha20-Poly1305 a nonce etendu par HKDF (LH-5, stegano_lib.py)
 6. Dissimulation    : géométrie La Livrée d'Hermès
 
 Zones déni plausible (grille 90×90 = 225 blocs 6×6) :
@@ -43,13 +43,20 @@ def _argon2id_identity(passphrase: str, salt: bytes) -> bytes:
         time_cost=3, memory_cost=65536, parallelism=4,
         hash_len=32, type=_Argon2Type.ID)
 
-def _xchacha_enc2(key, pt, aad=b''):
+# LH-5 (audit G. Kerma) : renommees depuis _xchacha_enc2/_xchacha_dec2.
+# ChaCha20-Poly1305 a nonce etendu par HKDF (pas du XChaCha20 standard :
+# la sous-cle vient de HKDF-SHA256, non de HChaCha20 — non interoperable
+# avec libsodium/PyNaCl). Meme construction que crypto_core.py, dupliquee
+# ici plutot qu'importee ; le HKDF info= reste 'XChaCha20-HChaCha20-subkey'
+# tel quel, c'est un simple libelle de derivation, pas un nom d'API — le
+# changer romprait le dechiffrement des identites deja exportees.
+def _chacha20_hkdf_enc2(key, pt, aad=b''):
     n=os.urandom(24)
     sk=_HKDF2(_hashes2.SHA256(),32,salt=n[:16],info=b'XChaCha20-HChaCha20-subkey').derive(key)
     ct=ChaCha20Poly1305(sk).encrypt(b'\x00'*4+n[16:],pt,aad or None)
     return n+ct
 
-def _xchacha_dec2(key, data, aad=b''):
+def _chacha20_hkdf_dec2(key, data, aad=b''):
     n,ct=data[:24],data[24:]
     sk=_HKDF2(_hashes2.SHA256(),32,salt=n[:16],info=b'XChaCha20-HChaCha20-subkey').derive(key)
     return ChaCha20Poly1305(sk).decrypt(b'\x00'*4+n[16:],ct,aad or None)
@@ -81,13 +88,13 @@ class Identity:
                   serialization.PrivateFormat.Raw, serialization.NoEncryption())
         salt  = os.urandom(16)
         key   = _argon2id_identity(passphrase, salt)
-        return salt + _xchacha_enc2(key, raw, b'SecuBox-Identity-v2')
+        return salt + _chacha20_hkdf_enc2(key, raw, b'SecuBox-Identity-v2')
 
     @classmethod
     def from_export(cls, data: bytes, passphrase: str) -> 'Identity':
         salt, enc = data[:16], data[16:]
         key = _argon2id_identity(passphrase, salt)
-        raw = _xchacha_dec2(key, enc, b'SecuBox-Identity-v2')
+        raw = _chacha20_hkdf_dec2(key, enc, b'SecuBox-Identity-v2')
         return cls(raw)
 
 
@@ -203,14 +210,14 @@ class Session:
         raw = self._eph.private_bytes(
             serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
             serialization.NoEncryption())
-        return _xchacha_enc2(self._pending_key(), raw, b'SecuBox-Pending-v1')
+        return _chacha20_hkdf_enc2(self._pending_key(), raw, b'SecuBox-Pending-v1')
 
     @classmethod
     def resume(cls, ref256: List[Dict], identity: 'Identity',
                pending: bytes) -> 'Session':
         """Reconstruit la Session qui a produit ce pending, même éphémère."""
         self = cls(ref256, identity)
-        raw  = _xchacha_dec2(self._pending_key(), pending, b'SecuBox-Pending-v1')
+        raw  = _chacha20_hkdf_dec2(self._pending_key(), pending, b'SecuBox-Pending-v1')
         self._eph     = X25519PrivateKey.from_private_bytes(raw)
         self._eph_pub = self._eph.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw)
@@ -556,7 +563,7 @@ def demo():
     print("\n7. IDENTITÉ EXPORTÉE\n")
     exported  = alice.export_private("passphrase_test")
     alice2    = Identity.from_export(exported, "passphrase_test")
-    print(f"   {len(exported)} bytes chiffrés (Argon2id+XChaCha20) ✓")
+    print(f"   {len(exported)} bytes chiffrés (Argon2id+ChaCha20-HKDF) ✓")
     print(f"   Restaurée identique : {alice.public_bytes == alice2.public_bytes} ✓")
 
     print("\n=== ARCHITECTURE SECUBOX ===\n")
@@ -565,7 +572,7 @@ def demo():
     print("  Authentification: identité liée à la session — fingerprint")
     print("                    à vérifier hors bande")
     print("  Forward secrecy : clé éphémère détruite après derive()")
-    print("  Chiffrement     : XChaCha20-Poly1305 (nonce 24 bytes)")
+    print("  Chiffrement     : ChaCha20-Poly1305 à nonce étendu par HKDF (nonce 24 bytes, LH-5)")
     print("  Dissimulation   : La Livrée d'Hermès (Ref256+Ref360)")
     print("  Déni plausible  : 2 zones, 0 collision, 1 grille")
 

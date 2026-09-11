@@ -11,7 +11,7 @@ Tout échec indique une rupture de compatibilité entre versions.
 Structure :
   Classe A — Dérivation de clés (pure, déterministe)
   Classe B — Grammaire Carter (déterministe)
-  Classe C — Format payload (key commitment + XChaCha20)
+  Classe C — Format payload (key commitment + ChaCha20-HKDF)
   Classe D — Décodage (grilles pré-calculées, fixtures JSON)
   Classe E — Compatibilité croisée encode/decode
 
@@ -239,7 +239,7 @@ class TestCarterGrammar(unittest.TestCase):
 # ce flux — pas les octets bruts de `_encrypt()` — que consomme `_decrypt()`.
 # ══════════════════════════════════════════════════════════════════════════════
 class TestPayloadFormat(unittest.TestCase):
-    """Vérifier la structure du payload XChaCha20 + key commitment."""
+    """Vérifier la structure du payload ChaCha20-HKDF + key commitment."""
 
     def _make_payload(self, msg: str, key: bytes) -> bytes:
         """Génère un payload déterministe avec nonce fixe."""

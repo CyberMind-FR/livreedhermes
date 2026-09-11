@@ -22,7 +22,7 @@ Concept :
 
   Propriété fondamentale :
     'structured' et 'message' sont statistiquement INDISCERNABLES sans la clé.
-    XChaCha20 produit du pseudo-aléatoire uniforme, identique au bruit pur.
+    ChaCha20-HKDF produit du pseudo-aléatoire uniforme, identique au bruit pur.
     → La grammaire elle-même est une couche secrète supplémentaire.
 """
 
@@ -49,7 +49,7 @@ def _carter_split(master_key: bytes):
     """
     Séparation explicite des clés Carter [correction 2].
     Deux usages distincts → deux sous-clés indépendantes via HKDF.
-      xchacha_key : chiffrement XChaCha20-Poly1305
+      xchacha_key : chiffrement ChaCha20-Poly1305 à nonce étendu par HKDF (LH-5)
       grammar_key : dérivation de la grammaire (rôles + formes)
     Propriété : la grammaire ne révèle rien sur la clé de chiffrement et vice-versa.
     """
@@ -108,7 +108,7 @@ def encode_carter(message: str, master_key: bytes,
       - La grammaire (rôles des 225 blocs : pur / structuré / message)
       - La forme géométrique de chaque bloc non-pur
 
-    Blocs 'message'    → positions = nibbles du message chiffré (XChaCha20)
+    Blocs 'message'    → positions = nibbles du message chiffré (ChaCha20-HKDF)
     Blocs 'structuré'  → positions = valeurs aléatoires (indiscernables)
     Blocs 'pur'        → tout aléatoire, aucune structure appliquée
 
@@ -268,7 +268,7 @@ def encode_carter_360(message: str, master_key: bytes,
     Grammaire dérivée de master_key :
       'pur'       → bruit aléatoire, aucune structure 12×12
       'structuré' → forme Ref360 appliquée, valeurs aléatoires
-      'message'   → forme Ref360 appliquée, valeurs = message XChaCha20
+      'message'   → forme Ref360 appliquée, valeurs = message ChaCha20-HKDF
 
     Capacité utile : 152 caractères en moyenne sur 200 clés (49 à 246),
     contre 214 pour Carter 90×90 Ref256 — inférieure malgré une grille plus
