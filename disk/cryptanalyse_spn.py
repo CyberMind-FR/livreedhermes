@@ -37,6 +37,7 @@ import argparse
 import collections
 import hashlib
 import itertools
+import json
 import math
 import os
 import random
@@ -46,6 +47,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import disk_lib as D
+
+# Valeurs annoncées par l'en-tête de disk_lib.py. Elles ne sont pas des
+# constantes du code mais des AFFIRMATIONS à vérifier : toute divergence est
+# un écart de documentation, et le script échoue pour le signaler. À mettre
+# à jour en même temps que l'en-tête, jamais séparément.
+DOC_REF256_PERMS = 288
+DOC_REF360_PERMS = 116
 
 
 # ── Outils sur les permutations ───────────────────────────────────────────────
@@ -221,7 +229,8 @@ def espace_permutations(r256, r360):
         })
     # L'en-tête de disk_lib annonce 288 et 116 : on les tient pour une
     # affirmation à vérifier, pas pour une donnée.
-    succes = len(d256) == 288 and len(d360) == 116
+    succes = (len(d256) == DOC_REF256_PERMS
+              and len(d360) == DOC_REF360_PERMS)
     return lignes, d256, d360, succes
 
 
@@ -426,7 +435,9 @@ def main():
     r256, r360 = D.load_referents()
     spn = D.GeoSPN(r256, r360)
     print(f'\nRef256 : {len(r256)} formes')
-    print(f'Ref360 : {len(r360)} formes retenues sur 294 '
+    with open(D._find_ref('referent_360.json')) as f:
+        n360_brut = len(json.load(f))
+    print(f'Ref360 : {len(r360)} formes retenues sur {n360_brut} '
           f'(seules celles totalisant 24 positions)')
 
     # 1
