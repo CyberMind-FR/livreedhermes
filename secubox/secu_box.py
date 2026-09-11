@@ -512,3 +512,70 @@ def decode_carter_mix_session(grid: List[List[int]], session_keys: Dict,
                                 ref360: Optional[List[Dict]] = None) -> str:
     from stegano_lib import decode_carter_mix
     return decode_carter_mix(grid, session_keys['steg_key'], ref256, ref360)
+
+
+# ── Mode Carter Random v3 dans SecuBox ──────────────────────────────────────────
+# Variante de la section « Mode Carter » ci-dessus : au lieu de la grille
+# Carter à Référent 256/360 fixe, la grammaire dérive ses PROPRES référents
+# (10 seeds, 256 formes générées dynamiquement chacun). Aucun fichier JSON de
+# référent n'est nécessaire. Fonctions additives — n'affectent pas
+# encode_carter_session/decode_carter_session/carter_deniable ci-dessus, qui
+# restent la voie Carter à référent fixe.
+
+def encode_carter_random_session(message: str, session_keys: Dict) -> Tuple:
+    """
+    Encode un message en mode Carter Random v3 depuis une session X25519.
+    Utilise steg_key comme master_key de la grammaire (référents dérivés,
+    pas de referent_256.json requis).
+
+    session_keys : résultat de Session.derive()
+    Retourne     : (grille 90×90, métadonnées de capacité)
+    """
+    from carter_random import encode_carter_random
+    return encode_carter_random(message, session_keys['steg_key'])
+
+def decode_carter_random_session(grid: List[List[int]], session_keys: Dict) -> str:
+    """Décode une grille Carter Random v3 depuis les clés de session."""
+    from carter_random import decode_carter_random
+    return decode_carter_random(grid, session_keys['steg_key'])
+
+def encode_carter_random_session_360(message: str, session_keys: Dict) -> Tuple:
+    """Carter Random v3 sur grille 180×180 depuis une session X25519."""
+    from carter_random import encode_carter_random_360
+    return encode_carter_random_360(message, session_keys['steg_key'])
+
+def decode_carter_random_session_360(grid: List[List[int]], session_keys: Dict) -> str:
+    """Décode une grille Carter Random v3 180×180 depuis les clés de session."""
+    from carter_random import decode_carter_random_360
+    return decode_carter_random_360(grid, session_keys['steg_key'])
+
+def carter_random_deniable(
+    real_message:   str,
+    real_key:       bytes,
+    duress_message: str,
+    duress_key:     bytes,
+) -> tuple:
+    """
+    Déni plausible Carter Random v3 : deux grilles 90×90 indépendantes, une
+    par clé, chacune avec sa propre grammaire et ses propres référents
+    dérivés. Aucun observateur ne peut prouver laquelle est réelle.
+
+    Retourne (grid_real, grid_duress) — chaque élément est le couple
+    (grille, métadonnées) renvoyé par encode_carter_random().
+    """
+    from carter_random import encode_carter_random
+    grid_real   = encode_carter_random(real_message,   real_key)
+    grid_duress = encode_carter_random(duress_message, duress_key)
+    return grid_real, grid_duress
+
+def carter_random_deniable_360(
+    real_message:   str,
+    real_key:       bytes,
+    duress_message: str,
+    duress_key:     bytes,
+) -> tuple:
+    """Variante 180×180 de carter_random_deniable()."""
+    from carter_random import encode_carter_random_360
+    grid_real   = encode_carter_random_360(real_message,   real_key)
+    grid_duress = encode_carter_random_360(duress_message, duress_key)
+    return grid_real, grid_duress
