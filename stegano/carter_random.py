@@ -122,18 +122,21 @@ def get_referent(seed: int) -> List[Dict]:
     return _CACHE[seed]
 
 # ── Dérivation des paramètres clé ───────────────────────────────────────────────
-def _derive_params(grammar_key: bytes) -> Tuple[int, bool]:
+def _derive_params(grammar_key: bytes,
+                    grid_size: int = GRID_SIZE) -> Tuple[int, bool]:
     """
     Retourne (seed, meta_mode) depuis grammar_key.
     meta_mode=True  : lecture par méta-blocs 18×18 (concentrique)
     meta_mode=False : lecture bloc à bloc 6×6
 
-    CR-1 (audit G. Kerma, rév. 2) : le mode méta ne tire que 25 rôles
-    (variance ~35 %) et peut produire une capacité quasi nulle pour
-    certaines clés. Si la capacité méta calculée pour cette clé est
-    insuffisante, bascule déterministe vers le mode individuel — le
-    basculement est reproductible au décodage car il ne dépend que de la
-    clé, jamais d'un tirage séparé.
+    CR-1 (audit G. Kerma, rév. 3) : bascule déterministe vers le mode
+    individuel quand le mode méta offre moins de capacité que le mode
+    individuel pour cette clé — comparaison directe plutôt qu'un seuil fixe.
+
+    CR-1b (audit G. Kerma, rév. 3) : grid_size est propagé pour calibrer
+    la comparaison sur la géométrie effectivement encodée (90×90 ou
+    180×180) — tous les appelants doivent transmettre leur grid_size réel,
+    sinon la comparaison porte sur la mauvaise géométrie.
     """
     km = _HKDF(_hh.SHA256(), 4, salt=b'Carter-params-v3',
                info=b'seed-and-mode').derive(grammar_key)
@@ -141,13 +144,24 @@ def _derive_params(grammar_key: bytes) -> Tuple[int, bool]:
     meta_raw = km[1] < 128   # ~50 % de chances
 
     if meta_raw:
-        ref   = get_referent(seed)
-        mg    = _grammar_meta(grammar_key, ref)
-        n_msg = sum(1 for x in mg if x['role'] == _MESSAGE)
-        cap   = max_message_for(n_msg * META * META * CELL_SIZE)
-        # Seuil 60 caractères : le mode individuel garantit toujours plus
-        # (225 blocs, variance ~12 %). En dessous, on bascule.
-        meta_mode = cap >= 60
+        ref = get_referent(seed)
+
+        # Capacité méta sur la géométrie effectivement encodée
+        n_meta_side = grid_size // (CELL_SIZE * META)
+        mg          = _grammar_meta(grammar_key, ref,
+                                     n_meta_tot=n_meta_side * n_meta_side,
+                                     n_meta=n_meta_side)
+        n_msg_meta  = sum(1 for x in mg if x['role'] == _MESSAGE)
+        cap_meta    = n_msg_meta * META * META * CELL_SIZE
+
+        # Capacité individuelle pour la même clé et la même géométrie
+        n_side_ind = grid_size // CELL_SIZE
+        gi         = _grammar_individual(grammar_key, ref, n_side=n_side_ind)
+        n_msg_ind  = sum(1 for x in gi if x['role'] == _MESSAGE)
+        cap_ind    = n_msg_ind * CELL_SIZE
+
+        # Bascule déterministe : méta seulement si meilleur que individuel
+        meta_mode = cap_meta >= cap_ind
     else:
         meta_mode = False
 
@@ -202,7 +216,7 @@ def encode_carter_random(message: str,
     Tous les paramètres géométriques sont dérivés de master_key.
     """
     xchacha_key, grammar_key = _carter_split(master_key)
-    seed, meta_mode = _derive_params(grammar_key)
+    seed, meta_mode = _derive_params(grammar_key, grid_size)
     ref = get_referent(seed)
     # Calculs dépendants de grid_size
     n_side_g  = grid_size // CELL_SIZE
@@ -281,7 +295,7 @@ def decode_carter_random(grid: List, master_key: bytes,
                           grid_size: int = GRID_SIZE) -> str:
     """Décode une grille 90×90."""
     xchacha_key, grammar_key = _carter_split(master_key)
-    seed, meta_mode = _derive_params(grammar_key)
+    seed, meta_mode = _derive_params(grammar_key, grid_size)
     ref = get_referent(seed)
     n_side_g  = grid_size // CELL_SIZE
     n_meta_g  = n_side_g  // META
@@ -321,29 +335,34 @@ def decode_carter_random(grid: List, master_key: bytes,
     return _decrypt(vals, xchacha_key)
 
 # ── Utilitaires ─────────────────────────────────────────────────────────────────
-def random_fits(message: str, master_key: bytes) -> bool:
+def random_fits(message: str, master_key: bytes,
+                 grid_size: int = GRID_SIZE) -> bool:
     """Vérifie si le message tient dans la grille avec la config dérivée."""
     _, grammar_key = _carter_split(master_key)
-    seed, meta_mode = _derive_params(grammar_key)
+    seed, meta_mode = _derive_params(grammar_key, grid_size)
     ref = get_referent(seed)
+    n_side_g = grid_size // CELL_SIZE
+    n_meta_g = n_side_g // META
     if not meta_mode:
-        g     = _grammar_individual(grammar_key, ref)
+        g     = _grammar_individual(grammar_key, ref, n_side_g)
         n_pos = sum(1 for x in g if x['role'] == _MESSAGE) * CELL_SIZE
     else:
-        g     = _grammar_meta(grammar_key, ref)
+        g     = _grammar_meta(grammar_key, ref, n_meta_g * n_meta_g, n_meta_g)
         n_pos = sum(1 for x in g if x['role'] == _MESSAGE) * META * META * CELL_SIZE
     return len(message) <= max_message_for(n_pos)
 
-def random_capacity(master_key: bytes) -> Dict:
+def random_capacity(master_key: bytes, grid_size: int = GRID_SIZE) -> Dict:
     """Retourne la capacité disponible pour une clé donnée."""
     _, grammar_key = _carter_split(master_key)
-    seed, meta_mode = _derive_params(grammar_key)
+    seed, meta_mode = _derive_params(grammar_key, grid_size)
     ref = get_referent(seed)
+    n_side_g = grid_size // CELL_SIZE
+    n_meta_g = n_side_g // META
     if not meta_mode:
-        g    = _grammar_individual(grammar_key, ref)
+        g    = _grammar_individual(grammar_key, ref, n_side_g)
         mult = CELL_SIZE
     else:
-        g    = _grammar_meta(grammar_key, ref)
+        g    = _grammar_meta(grammar_key, ref, n_meta_g * n_meta_g, n_meta_g)
         mult = META * META * CELL_SIZE
     n_msg = sum(1 for x in g if x['role'] == _MESSAGE)
     n_pur = sum(1 for x in g if x['role'] == _PURE)
